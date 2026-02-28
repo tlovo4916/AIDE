@@ -15,7 +15,7 @@ from backend.types import AgentRole, SubAgentRequest, SubAgentResult
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 300.0  # 5 minutes
-_SUBAGENT_MODEL = "deepseek-chat"
+_SUBAGENT_MODEL = "deepseek-reasoner"
 
 
 @runtime_checkable

@@ -62,6 +62,25 @@ export function deleteProject(id: string) {
   return request<void>(`/api/projects/${id}`, { method: "DELETE" });
 }
 
+export function startProject(id: string) {
+  return request<{ id: string; status: string }>(`/api/projects/${id}/start`, {
+    method: "POST",
+  });
+}
+
+export function pauseProject(id: string) {
+  return request<{ id: string; status: string }>(`/api/projects/${id}/pause`, {
+    method: "POST",
+  });
+}
+
+export function resumeProject(id: string) {
+  return request<{ id: string; status: string }>(
+    `/api/projects/${id}/resume`,
+    { method: "POST" }
+  );
+}
+
 // --- Papers ---
 
 export function uploadPaper(file: File) {

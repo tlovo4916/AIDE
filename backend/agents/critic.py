@@ -10,7 +10,7 @@ class CriticAgent(BaseAgent):
 
     role = AgentRole.CRITIC
     system_prompt_template = "critic.j2"
-    preferred_model = "claude-opus-4-20250514"
+    preferred_model = "deepseek-reasoner"
     primary_artifact_types = [ArtifactType.REVIEW]
     dependency_artifact_types = [
         ArtifactType.DIRECTIONS,

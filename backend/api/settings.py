@@ -13,10 +13,18 @@ class LLMSettings(BaseModel):
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
     default_model: str = "deepseek-reasoner"
+    orchestrator_model: str = "deepseek-chat"
     embedding_model: str = "text-embedding-3-small"
     summarizer_model: str = "deepseek-chat"
     enable_web_retrieval: bool = False
     semantic_scholar_api_key: str | None = None
+    agent_model_overrides: dict[str, str] = {
+        "director": "deepseek-reasoner",
+        "scientist": "deepseek-reasoner",
+        "librarian": "deepseek-reasoner",
+        "writer": "deepseek-reasoner",
+        "critic": "deepseek-reasoner",
+    }
 
 
 def _mask(key: str | None) -> str | None:
@@ -34,10 +42,12 @@ async def get_settings() -> LLMSettings:
         openrouter_api_key=_mask(settings.openrouter_api_key),
         openai_api_key=_mask(settings.openai_api_key),
         default_model=settings.default_model,
+        orchestrator_model=settings.orchestrator_model,
         embedding_model=settings.embedding_model,
         summarizer_model=settings.summarizer_model,
         enable_web_retrieval=settings.enable_web_retrieval,
         semantic_scholar_api_key=_mask(settings.semantic_scholar_api_key),
+        agent_model_overrides=settings.agent_model_overrides,
     )
 
 
@@ -53,8 +63,10 @@ async def update_settings(body: LLMSettings) -> LLMSettings:
         settings.semantic_scholar_api_key = body.semantic_scholar_api_key
 
     settings.default_model = body.default_model
+    settings.orchestrator_model = body.orchestrator_model
     settings.embedding_model = body.embedding_model
     settings.summarizer_model = body.summarizer_model
     settings.enable_web_retrieval = body.enable_web_retrieval
+    settings.agent_model_overrides = body.agent_model_overrides
 
     return await get_settings()

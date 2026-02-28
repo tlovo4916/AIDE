@@ -13,14 +13,17 @@ import aiofiles
 from backend.types import (
     ArtifactMeta,
     ArtifactType,
+    BlackboardAction,
     ChallengeRecord,
     ChallengeStatus,
     ContextLevel,
     DecisionRecord,
     Message,
+    ResearchPhase,
 )
 
 if TYPE_CHECKING:
+    from backend.blackboard.actions import ActionExecutor
     from backend.blackboard.levels import LevelGenerator
 
 logger = logging.getLogger(__name__)
@@ -34,10 +37,12 @@ class Blackboard:
         self,
         project_path: Path,
         level_generator: LevelGenerator | None = None,
+        action_executor: ActionExecutor | None = None,
     ) -> None:
         self._root = project_path
         self._meta_path = self._root / "meta.json"
         self._level_gen = level_generator
+        self._action_executor = action_executor
 
     @property
     def root(self) -> Path:
@@ -299,6 +304,145 @@ class Blackboard:
         meta.update(kwargs)
         meta["updated_at"] = datetime.utcnow().isoformat()
         await self._write_json(self._meta_path, meta)
+
+    # ------------------------------------------------------------------
+    # Board Protocol (required by OrchestrationEngine)
+    # ------------------------------------------------------------------
+
+    async def get_state_summary(self, level: ContextLevel = ContextLevel.L0) -> str:
+        """Build a panoramic summary of all non-superseded artifacts."""
+        lines: list[str] = []
+        meta = await self.get_project_meta()
+        phase = meta.get("phase", "explore")
+        iteration = meta.get("iteration", 0)
+        lines.append(f"Phase: {phase} | Iteration: {iteration}")
+
+        for at in ArtifactType:
+            metas = await self.list_artifacts(at)
+            if not metas:
+                continue
+            lines.append(f"\n### {at.value} ({len(metas)} artifacts)")
+            for m in metas:
+                ver = await self.get_latest_version(at, m.artifact_id)
+                if ver == 0:
+                    continue
+                content = await self.read_artifact(at, m.artifact_id, ver, level)
+                text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)[:300] if content else "(empty)"
+                lines.append(f"  - {m.artifact_id} v{ver}: {text[:200]}")
+
+        open_ch = await self.get_open_challenges()
+        if open_ch:
+            lines.append(f"\n### Open Challenges ({len(open_ch)})")
+            for ch in open_ch:
+                lines.append(f"  - [{ch.challenger.value}] {ch.argument[:120]}")
+
+        return "\n".join(lines)
+
+    async def apply_action(self, action: BlackboardAction) -> None:
+        if self._action_executor is None:
+            from backend.blackboard.actions import ActionExecutor
+            self._action_executor = ActionExecutor()
+        await self._action_executor.execute(action, self)
+
+    async def dedup_check(
+        self, actions: list[BlackboardAction]
+    ) -> list[BlackboardAction]:
+        """Pass through all actions (dedup requires embedding service, skip when unavailable)."""
+        return actions
+
+    async def get_open_challenge_count(self) -> int:
+        return len(await self.get_open_challenges())
+
+    async def get_latest_critic_score(self) -> float:
+        reviews = await self.list_artifacts(ArtifactType.REVIEW)
+        if not reviews:
+            return 0.0
+        latest = reviews[-1]
+        ver = await self.get_latest_version(ArtifactType.REVIEW, latest.artifact_id)
+        if ver == 0:
+            return 0.0
+        l1 = await self.read_artifact(ArtifactType.REVIEW, latest.artifact_id, ver, ContextLevel.L1)
+        if isinstance(l1, dict):
+            score = l1.get("overall_score")
+            if isinstance(score, (int, float)):
+                return float(score)
+        return 0.0
+
+    async def get_recent_revision_count(self, rounds: int) -> int:
+        """Count artifacts that have version > 1 (indicating revisions)."""
+        count = 0
+        for at in ArtifactType:
+            metas = await self.list_artifacts(at)
+            for m in metas:
+                if m.version > 1:
+                    count += 1
+        return count
+
+    async def get_phase_iteration_count(self, phase: ResearchPhase) -> int:
+        meta = await self.get_project_meta()
+        phase_iters = meta.get("phase_iterations", {})
+        return phase_iters.get(phase.value, 0)
+
+    async def get_artifacts_since_phase(self, phase: ResearchPhase) -> list[str]:
+        """List artifact IDs from the current or given phase."""
+        result: list[str] = []
+        for at in ArtifactType:
+            metas = await self.list_artifacts(at)
+            for m in metas:
+                result.append(f"{at.value}/{m.artifact_id}")
+        return result
+
+    async def mark_superseded(self, artifact_id: str) -> None:
+        for at in ArtifactType:
+            meta = await self.read_artifact_meta(at, artifact_id)
+            if meta is not None:
+                await self.update_artifact_meta(at, artifact_id, superseded=True)
+                return
+
+    async def update_meta(self, key: str, value: object) -> None:
+        await self.update_project_meta(**{key: value})
+
+    async def has_contradictory_evidence(self) -> bool:
+        challenges = await self.list_challenges()
+        for ch in challenges:
+            if ch.status == ChallengeStatus.OPEN and "contradict" in ch.argument.lower():
+                return True
+        return False
+
+    async def has_logic_gaps(self) -> bool:
+        challenges = await self.list_challenges()
+        for ch in challenges:
+            if ch.status == ChallengeStatus.OPEN and ("gap" in ch.argument.lower() or "logic" in ch.argument.lower()):
+                return True
+        return False
+
+    async def has_direction_issues(self) -> bool:
+        challenges = await self.list_challenges()
+        for ch in challenges:
+            if ch.status == ChallengeStatus.OPEN and "direction" in ch.argument.lower():
+                return True
+        return False
+
+    async def serialize(self) -> dict[str, Any]:
+        meta = await self.get_project_meta()
+        artifacts: dict[str, list[dict[str, Any]]] = {}
+        for at in ArtifactType:
+            metas = await self.list_artifacts(at, include_superseded=True)
+            if metas:
+                artifacts[at.value] = [m.model_dump(mode="json") for m in metas]
+        challenges = [c.model_dump(mode="json") for c in await self.list_challenges()]
+        decisions = [d.model_dump(mode="json") for d in await self.get_decisions()]
+        messages = [m.model_dump(mode="json") for m in await self.get_messages()]
+        return {
+            "meta": meta,
+            "artifacts": artifacts,
+            "challenges": challenges,
+            "decisions": decisions,
+            "messages": messages,
+        }
+
+    def get_project_path(self) -> Path:
+        return self._root
 
     # ------------------------------------------------------------------
     # Internal I/O

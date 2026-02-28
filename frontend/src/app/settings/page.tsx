@@ -8,43 +8,50 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 interface SettingsData {
-  api_keys: {
-    deepseek: string;
-    openrouter: string;
-    openai: string;
-  };
-  model_preferences: {
-    default_model: string;
-    agent_overrides: Record<string, string>;
-  };
-  research_defaults: {
-    checkpoint_timeout_seconds: number;
-    max_iterations_per_phase: number;
-  };
+  deepseek_api_key: string | null;
+  openrouter_api_key: string | null;
+  openai_api_key: string | null;
+  default_model: string;
+  orchestrator_model: string;
+  embedding_model: string;
+  summarizer_model: string;
+  enable_web_retrieval: boolean;
+  semantic_scholar_api_key: string | null;
+  agent_model_overrides: Record<string, string>;
 }
 
 const MODEL_OPTIONS = [
-  { value: "deepseek-reasoner", label: "DeepSeek V3.2 Reasoner" },
-  { value: "deepseek-chat", label: "DeepSeek V3.2 Chat" },
-  { value: "gpt", label: "GPT-5.3 Codex" },
-  { value: "opus", label: "Claude Opus 4.6" },
-  { value: "gemini-pro", label: "Gemini 3.1 Pro" },
+  { value: "deepseek-reasoner", label: "DeepSeek Reasoner" },
+  { value: "deepseek-chat", label: "DeepSeek Chat" },
+  { value: "gpt", label: "GPT (via OpenRouter)" },
+  { value: "opus", label: "Claude Opus (via OpenRouter)" },
+  { value: "gemini-pro", label: "Gemini Pro (via OpenRouter)" },
 ];
 
 const AGENT_ROLES = [
-  "scout",
-  "analyst",
-  "critic",
-  "scribe",
-  "orchestrator",
+  { key: "director", label: "Director" },
+  { key: "scientist", label: "Scientist" },
+  { key: "librarian", label: "Librarian" },
+  { key: "writer", label: "Writer" },
+  { key: "critic", label: "Critic" },
 ];
 
 const DEFAULT_SETTINGS: SettingsData = {
-  api_keys: { deepseek: "", openrouter: "", openai: "" },
-  model_preferences: { default_model: "deepseek-reasoner", agent_overrides: {} },
-  research_defaults: {
-    checkpoint_timeout_seconds: 300,
-    max_iterations_per_phase: 10,
+  deepseek_api_key: null,
+  openrouter_api_key: null,
+  openai_api_key: null,
+  default_model: "deepseek-reasoner",
+  orchestrator_model: "deepseek-chat",
+  embedding_model: "text-embedding-3-small",
+  summarizer_model: "deepseek-chat",
+  enable_web_retrieval: false,
+  semantic_scholar_api_key: null,
+  agent_model_overrides: {
+    director: "deepseek-reasoner",
+    scientist: "deepseek-reasoner",
+    librarian: "deepseek-reasoner",
+    writer: "deepseek-reasoner",
+    critic: "deepseek-reasoner",
   },
 };
 
@@ -73,40 +80,17 @@ export default function SettingsPage() {
     }
   }, [settings]);
 
-  const updateApiKey = (key: keyof SettingsData["api_keys"], value: string) => {
-    setSettings((prev) => ({
-      ...prev,
-      api_keys: { ...prev.api_keys, [key]: value },
-    }));
-  };
-
-  const updateDefaultModel = (value: string) => {
-    setSettings((prev) => ({
-      ...prev,
-      model_preferences: { ...prev.model_preferences, default_model: value },
-    }));
+  const updateField = <K extends keyof SettingsData>(key: K, value: SettingsData[K]) => {
+    setSettings((prev) => ({ ...prev, [key]: value }));
   };
 
   const updateAgentOverride = (agent: string, value: string) => {
     setSettings((prev) => ({
       ...prev,
-      model_preferences: {
-        ...prev.model_preferences,
-        agent_overrides: {
-          ...prev.model_preferences.agent_overrides,
-          [agent]: value,
-        },
+      agent_model_overrides: {
+        ...prev.agent_model_overrides,
+        [agent]: value,
       },
-    }));
-  };
-
-  const updateResearchDefault = (
-    key: keyof SettingsData["research_defaults"],
-    value: number
-  ) => {
-    setSettings((prev) => ({
-      ...prev,
-      research_defaults: { ...prev.research_defaults, [key]: value },
     }));
   };
 
@@ -139,24 +123,24 @@ export default function SettingsPage() {
             <Input
               label="DeepSeek API Key"
               type="password"
-              value={settings.api_keys.deepseek}
-              onChange={(e) => updateApiKey("deepseek", e.target.value)}
+              value={settings.deepseek_api_key ?? ""}
+              onChange={(e) => updateField("deepseek_api_key", e.target.value || null)}
               placeholder="sk-..."
               togglePassword
             />
             <Input
               label="OpenRouter API Key"
               type="password"
-              value={settings.api_keys.openrouter}
-              onChange={(e) => updateApiKey("openrouter", e.target.value)}
+              value={settings.openrouter_api_key ?? ""}
+              onChange={(e) => updateField("openrouter_api_key", e.target.value || null)}
               placeholder="sk-or-..."
               togglePassword
             />
             <Input
               label="OpenAI API Key"
               type="password"
-              value={settings.api_keys.openai}
-              onChange={(e) => updateApiKey("openai", e.target.value)}
+              value={settings.openai_api_key ?? ""}
+              onChange={(e) => updateField("openai_api_key", e.target.value || null)}
               placeholder="sk-..."
               togglePassword
             />
@@ -174,8 +158,25 @@ export default function SettingsPage() {
                 Default Model
               </label>
               <select
-                value={settings.model_preferences.default_model}
-                onChange={(e) => updateDefaultModel(e.target.value)}
+                value={settings.default_model}
+                onChange={(e) => updateField("default_model", e.target.value)}
+                className="w-full rounded-md border border-aide-border bg-aide-bg-tertiary px-3 py-2 text-sm text-aide-text-primary outline-none transition-colors focus:border-aide-border-focus"
+              >
+                {MODEL_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-aide-text-secondary">
+                Orchestrator Model
+              </label>
+              <select
+                value={settings.orchestrator_model}
+                onChange={(e) => updateField("orchestrator_model", e.target.value)}
                 className="w-full rounded-md border border-aide-border bg-aide-bg-tertiary px-3 py-2 text-sm text-aide-text-primary outline-none transition-colors focus:border-aide-border-focus"
               >
                 {MODEL_OPTIONS.map((opt) => (
@@ -188,20 +189,20 @@ export default function SettingsPage() {
 
             <div>
               <label className="mb-2 block text-sm font-medium text-aide-text-secondary">
-                Per-Agent Model Overrides
+                Per-Agent Model Configuration
               </label>
               <div className="space-y-2">
                 {AGENT_ROLES.map((role) => (
-                  <div key={role} className="flex items-center gap-3">
-                    <span className="w-24 text-sm capitalize text-aide-text-primary">
-                      {role}
+                  <div key={role.key} className="flex items-center gap-3">
+                    <span className="w-24 text-sm text-aide-text-primary">
+                      {role.label}
                     </span>
                     <select
                       value={
-                        settings.model_preferences.agent_overrides[role] ?? ""
+                        settings.agent_model_overrides[role.key] ?? ""
                       }
                       onChange={(e) =>
-                        updateAgentOverride(role, e.target.value)
+                        updateAgentOverride(role.key, e.target.value)
                       }
                       className="flex-1 rounded-md border border-aide-border bg-aide-bg-tertiary px-3 py-1.5 text-sm text-aide-text-primary outline-none transition-colors focus:border-aide-border-focus"
                     >
@@ -216,41 +217,6 @@ export default function SettingsPage() {
                 ))}
               </div>
             </div>
-          </CardContent>
-        </Card>
-
-        {/* Research Defaults */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Research Defaults</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Input
-              label="Checkpoint Timeout (seconds)"
-              type="number"
-              value={String(
-                settings.research_defaults.checkpoint_timeout_seconds
-              )}
-              onChange={(e) =>
-                updateResearchDefault(
-                  "checkpoint_timeout_seconds",
-                  Number(e.target.value)
-                )
-              }
-            />
-            <Input
-              label="Max Iterations Per Phase"
-              type="number"
-              value={String(
-                settings.research_defaults.max_iterations_per_phase
-              )}
-              onChange={(e) =>
-                updateResearchDefault(
-                  "max_iterations_per_phase",
-                  Number(e.target.value)
-                )
-              }
-            />
           </CardContent>
         </Card>
 

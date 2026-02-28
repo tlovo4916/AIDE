@@ -32,8 +32,12 @@ class Settings(BaseSettings):
 
     # -- LLM defaults --
     default_model: str = "deepseek-reasoner"
+    orchestrator_model: str = "deepseek-chat"
     embedding_model: str = "text-embedding-3-small"
     summarizer_model: str = "deepseek-chat"
+
+    # -- Per-agent model overrides (role -> model string) --
+    agent_model_overrides: dict[str, str] = Field(default_factory=dict)
 
     # -- ChromaDB --
     chroma_persist_dir: Path = Path("workspace/.chroma")

@@ -36,8 +36,8 @@ class LLMRouter(Protocol):
 class WriteBackGuard(Protocol):
     """Structural interface for blackboard write-back validation."""
 
-    async def validate(
-        self, actions: list[BlackboardAction]
+    async def check(
+        self, agent_response: str, executed_actions: list[BlackboardAction]
     ) -> list[BlackboardAction]: ...
 
 
@@ -72,16 +72,27 @@ class BaseAgent(ABC):
     # Public API
     # ------------------------------------------------------------------
 
+    def _resolve_model(self) -> str:
+        """Return the model to use, respecting user overrides via settings."""
+        from backend.config import settings
+        overrides = settings.agent_model_overrides
+        role_key = self.role.value
+        if overrides and role_key in overrides and overrides[role_key]:
+            return overrides[role_key]
+        return self.preferred_model
+
     async def execute(self, context: str, task: AgentTask) -> AgentResponse:
         prompt = self._build_prompt(context, task)
-        raw = await self._llm_router.generate(self.preferred_model, prompt)
+        model = self._resolve_model()
+        raw = await self._llm_router.generate(model, prompt)
 
         response = self._parse_response(raw)
 
         for action in response.actions:
             action.agent_role = self.role
 
-        response.actions = await self._write_back_guard.validate(response.actions)
+        extra_actions = await self._write_back_guard.check(raw, response.actions)
+        response.actions.extend(extra_actions)
 
         if not self.can_spawn_subagents:
             response.subagent_requests = []

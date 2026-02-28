@@ -12,9 +12,9 @@ from backend.types import (
     ResearchPhase,
 )
 
-logger = logging.getLogger(__name__)
+from backend.config import settings
 
-_PLANNING_MODEL = "claude-opus-4-20250514"
+logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
 You are the meta-cognitive orchestrator of the AIDE multi-agent research system.
@@ -82,7 +82,7 @@ class OrchestratorPlanner:
     ) -> OrchestratorDecision:
         prompt = self._build_prompt(board_state_summary, phase, iteration)
         raw = await self._llm_router.generate(
-            _PLANNING_MODEL, prompt, system_prompt=_SYSTEM_PROMPT
+            settings.orchestrator_model, prompt, system_prompt=_SYSTEM_PROMPT
         )
         return self._parse_decision(raw)
 

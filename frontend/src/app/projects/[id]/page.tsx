@@ -18,7 +18,13 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { getProject, respondToCheckpoint } from "@/lib/api";
+import {
+  getProject,
+  respondToCheckpoint,
+  startProject,
+  pauseProject,
+  resumeProject,
+} from "@/lib/api";
 import { useTypedWebSocket } from "@/hooks/useTypedWebSocket";
 import { useBlackboard } from "@/hooks/useBlackboard";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -49,10 +55,11 @@ interface Checkpoint {
 }
 
 const PHASES = [
-  { key: "direction", label: "Direction", icon: Search },
-  { key: "hypothesis", label: "Hypothesis", icon: Lightbulb },
+  { key: "explore", label: "Explore", icon: Search },
+  { key: "hypothesize", label: "Hypothesize", icon: Lightbulb },
   { key: "evidence", label: "Evidence", icon: FileText },
-  { key: "synthesis", label: "Synthesis", icon: BookOpen },
+  { key: "compose", label: "Compose", icon: BookOpen },
+  { key: "complete", label: "Complete", icon: CheckCircle2 },
 ];
 
 const ARTIFACT_SECTIONS = [
@@ -286,6 +293,7 @@ export default function ProjectPage() {
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null);
   const [checkpointLoading, setCheckpointLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
 
   const ws = useTypedWebSocket(projectId);
   const blackboard = useBlackboard(projectId);
@@ -323,6 +331,25 @@ export default function ProjectPage() {
 
     return () => unsubs.forEach((fn) => fn());
   }, [ws]);
+
+  const handleToggleRunning = useCallback(async () => {
+    if (!project || actionLoading) return;
+    setActionLoading(true);
+    try {
+      if (project.status === "running") {
+        await pauseProject(projectId);
+        setProject((prev) => (prev ? { ...prev, status: "paused" } : prev));
+      } else {
+        const fn = project.status === "paused" ? resumeProject : startProject;
+        await fn(projectId);
+        setProject((prev) => (prev ? { ...prev, status: "running" } : prev));
+      }
+    } catch (err) {
+      console.error("Failed to toggle project state", err);
+    } finally {
+      setActionLoading(false);
+    }
+  }, [project, projectId, actionLoading]);
 
   const handleCheckpointResponse = useCallback(
     async (value: string) => {
@@ -411,8 +438,12 @@ export default function ProjectPage() {
           <Button
             variant={isRunning ? "secondary" : "primary"}
             size="sm"
+            onClick={handleToggleRunning}
+            disabled={actionLoading}
           >
-            {isRunning ? (
+            {actionLoading ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : isRunning ? (
               <>
                 <Pause className="mr-1.5 h-3.5 w-3.5" />
                 Pause
@@ -420,7 +451,7 @@ export default function ProjectPage() {
             ) : (
               <>
                 <Play className="mr-1.5 h-3.5 w-3.5" />
-                Resume
+                {project.status === "paused" ? "Resume" : "Start"}
               </>
             )}
           </Button>

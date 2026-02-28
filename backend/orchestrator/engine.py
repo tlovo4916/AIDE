@@ -129,19 +129,32 @@ class OrchestrationEngine:
 
     async def run(self) -> None:
         self._running = True
+        logger.info("[Engine] Starting run loop for project %s", self._project_id)
         await self._heartbeat.start(self._project_id, self._board)
 
         try:
             while self._running and self._phase != ResearchPhase.COMPLETE:
                 self._iteration += 1
                 self._heartbeat.record_activity(self._project_id)
+                logger.info(
+                    "[Engine] === Iteration %d | phase=%s | project=%s ===",
+                    self._iteration, self._phase.value, self._project_id,
+                )
 
                 # 1. Assess blackboard state
+                logger.info("[Engine] Building state summary...")
                 summary = await self._build_state_summary(self._board)
+                logger.info("[Engine] State summary length: %d chars", len(summary))
 
                 # 2. Plan next action
+                logger.info("[Engine] Calling planner...")
                 decision = await self._planner.plan_next_action(
                     summary, self._phase, self._iteration
+                )
+                logger.info(
+                    "[Engine] Planner decided: agent=%s, task=%s",
+                    decision.agent_to_invoke.value,
+                    decision.task_description[:100],
                 )
 
                 # 3. Checkpoint gate

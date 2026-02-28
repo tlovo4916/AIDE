@@ -10,7 +10,7 @@ class DirectorAgent(BaseAgent):
 
     role = AgentRole.DIRECTOR
     system_prompt_template = "director.j2"
-    preferred_model = "claude-opus-4-20250514"
+    preferred_model = "deepseek-reasoner"
     primary_artifact_types = [ArtifactType.DIRECTIONS]
     dependency_artifact_types = [
         ArtifactType.HYPOTHESES,

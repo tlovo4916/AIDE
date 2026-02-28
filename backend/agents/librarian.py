@@ -10,7 +10,7 @@ class LibrarianAgent(BaseAgent):
 
     role = AgentRole.LIBRARIAN
     system_prompt_template = "librarian.j2"
-    preferred_model = "google/gemini-2.5-pro"
+    preferred_model = "deepseek-reasoner"
     primary_artifact_types = [ArtifactType.EVIDENCE_FINDINGS]
     dependency_artifact_types = [
         ArtifactType.HYPOTHESES,

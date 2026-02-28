@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.models import get_session, Project
+from backend.orchestrator import factory as engine_factory
 from backend.types import ResearchPhase
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -101,9 +102,19 @@ async def start_project(
     project = await session.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
-    if project.status != "active":
-        raise HTTPException(400, "Project is not in active state")
-    # TODO: trigger the research orchestration loop
+    if project.status not in ("active", "paused"):
+        raise HTTPException(400, "Project cannot be started in current state")
+
+    pid = str(project_id)
+    if engine_factory.is_running(pid):
+        raise HTTPException(409, "Research loop is already running")
+
+    project.status = "running"
+    await session.commit()
+    await session.refresh(project)
+
+    await engine_factory.start_engine(pid)
+
     return project
 
 
@@ -115,8 +126,10 @@ async def pause_project(
     project = await session.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
-    if project.status != "active":
-        raise HTTPException(400, "Project is not active")
+
+    pid = str(project_id)
+    engine_factory.stop_engine(pid)
+
     project.status = "paused"
     await session.commit()
     await session.refresh(project)
@@ -133,7 +146,15 @@ async def resume_project(
         raise HTTPException(404, "Project not found")
     if project.status != "paused":
         raise HTTPException(400, "Project is not paused")
-    project.status = "active"
+
+    pid = str(project_id)
+    if engine_factory.is_running(pid):
+        raise HTTPException(409, "Research loop is already running")
+
+    project.status = "running"
     await session.commit()
     await session.refresh(project)
+
+    await engine_factory.start_engine(pid)
+
     return project

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from backend.types import WSFrame, WSFrameType
+from backend.types import CheckpointAction, WSFrame, WSFrameType
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["websocket"])
 
@@ -86,6 +89,8 @@ async def _handle_request(
             {"project_id": project_id},
             request_id,
         )
+    elif event == "checkpoint.respond":
+        await _handle_checkpoint_response(ws, project_id, payload, request_id)
     else:
         await manager.send_response(
             ws,
@@ -93,6 +98,28 @@ async def _handle_request(
             {"message": f"Unknown event: {event}"},
             request_id,
         )
+
+
+async def _handle_checkpoint_response(
+    ws: WebSocket,
+    project_id: str,
+    payload: dict[str, Any],
+    request_id: str | None,
+) -> None:
+    from backend.orchestrator.factory import get_engine
+    checkpoint_id = payload.get("checkpoint_id", "")
+    action_str = payload.get("action", "skip")
+    feedback = payload.get("feedback")
+    try:
+        action = CheckpointAction(action_str)
+    except ValueError:
+        action = CheckpointAction.SKIP
+
+    from backend.checkpoint.manager import CheckpointManager
+    from backend.models import async_session_factory
+    mgr = CheckpointManager(session_factory=async_session_factory)
+    await mgr.apply_user_response(checkpoint_id, action, feedback)
+    await manager.send_response(ws, "checkpoint.responded", {"checkpoint_id": checkpoint_id}, request_id)
 
 
 @router.websocket("/ws/projects/{project_id}")

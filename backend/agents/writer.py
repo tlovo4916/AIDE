@@ -10,7 +10,7 @@ class WriterAgent(BaseAgent):
 
     role = AgentRole.WRITER
     system_prompt_template = "writer.j2"
-    preferred_model = "openai/gpt-4o"
+    preferred_model = "deepseek-reasoner"
     primary_artifact_types = [
         ArtifactType.OUTLINE,
         ArtifactType.DRAFT,
