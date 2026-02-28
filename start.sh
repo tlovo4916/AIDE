@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+if [ ! -f .env ]; then
+    cp .env.example .env
+    echo "[AIDE] .env created from .env.example -- please fill in your API keys"
+fi
+
+echo "[AIDE] Building and starting all services..."
+docker compose up --build -d
+
+echo ""
+echo "[AIDE] Waiting for services to be ready..."
+sleep 3
+
+echo ""
+echo "========================================="
+echo "  AIDE is running"
+echo "========================================="
+echo "  Frontend:  http://localhost:3000"
+echo "  Backend:   http://localhost:8000"
+echo "  API Docs:  http://localhost:8000/docs"
+echo "  Health:    http://localhost:8000/health"
+echo "  ChromaDB:  http://localhost:8100"
+echo "  Postgres:  localhost:5432"
+echo "========================================="
+echo ""
+echo "  Logs:  docker compose logs -f"
+echo "  Stop:  ./stop.sh"
+echo "========================================="

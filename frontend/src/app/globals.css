@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+:root {
+  --aide-bg-primary: #020617;
+  --aide-bg-secondary: #0f172a;
+  --aide-bg-tertiary: #1e293b;
+  --aide-bg-elevated: #334155;
+  --aide-text-primary: #f1f5f9;
+  --aide-text-secondary: #94a3b8;
+  --aide-text-muted: #64748b;
+  --aide-accent-blue: #3b82f6;
+  --aide-accent-blue-dim: #1d4ed8;
+  --aide-accent-amber: #f59e0b;
+  --aide-accent-green: #22c55e;
+  --aide-accent-red: #ef4444;
+  --aide-border: #1e293b;
+  --aide-border-focus: #3b82f6;
+}
+
+@theme {
+  --color-aide-bg-primary: var(--aide-bg-primary);
+  --color-aide-bg-secondary: var(--aide-bg-secondary);
+  --color-aide-bg-tertiary: var(--aide-bg-tertiary);
+  --color-aide-bg-elevated: var(--aide-bg-elevated);
+  --color-aide-text-primary: var(--aide-text-primary);
+  --color-aide-text-secondary: var(--aide-text-secondary);
+  --color-aide-text-muted: var(--aide-text-muted);
+  --color-aide-accent-blue: var(--aide-accent-blue);
+  --color-aide-accent-blue-dim: var(--aide-accent-blue-dim);
+  --color-aide-accent-amber: var(--aide-accent-amber);
+  --color-aide-accent-green: var(--aide-accent-green);
+  --color-aide-accent-red: var(--aide-accent-red);
+  --color-aide-border: var(--aide-border);
+  --color-aide-border-focus: var(--aide-border-focus);
+
+  --animate-fade-in: fade-in 0.3s ease-out forwards;
+  --animate-slide-up: slide-up 0.3s ease-out forwards;
+  --animate-pulse-subtle: pulse-subtle 2s ease-in-out infinite;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-subtle {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+body {
+  background-color: var(--aide-bg-primary);
+  color: var(--aide-text-primary);
+  font-family: var(--font-inter, ui-sans-serif, system-ui, sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--aide-bg-elevated);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--aide-text-muted);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--aide-bg-elevated) transparent;
+}
