@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import logging
+import uuid
 from datetime import datetime
-from typing import Any, Callable, Awaitable
+from typing import Any
 
-from sqlalchemy import Column, String, Integer, Float, DateTime
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.types import AgentRole
+
+logger = logging.getLogger(__name__)
 
 COST_PER_1K: dict[str, dict[str, float]] = {
     "deepseek-chat":       {"prompt": 0.0014, "completion": 0.0028},
@@ -21,29 +23,11 @@ COST_PER_1K: dict[str, dict[str, float]] = {
 }
 
 
-class Base(DeclarativeBase):
-    pass
-
-
-class TokenUsage(Base):
-    __tablename__ = "token_usage"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    project_id = Column(String, nullable=False, index=True)
-    agent_role = Column(String, nullable=False)
-    model = Column(String, nullable=False)
-    prompt_tokens = Column(Integer, default=0)
-    completion_tokens = Column(Integer, default=0)
-    cost = Column(Float, default=0.0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
-SessionFactory = Callable[[], Awaitable[AsyncSession]]
-
-
 class TokenTracker:
 
-    def __init__(self, session_factory: SessionFactory | None = None) -> None:
+    def __init__(
+        self, session_factory: async_sessionmaker[AsyncSession] | None = None
+    ) -> None:
         self._session_factory = session_factory
         self._memory_log: list[dict[str, Any]] = []
 
@@ -81,46 +65,59 @@ class TokenTracker:
         self._memory_log.append(record)
 
         if self._session_factory:
-            async with await self._session_factory() as session:
-                session.add(
-                    TokenUsage(
-                        project_id=project_id,
-                        agent_role=agent_role.value,
-                        model=model,
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        cost=cost,
+            from backend.models.token_usage import TokenUsage
+            try:
+                async with self._session_factory() as session:
+                    session.add(
+                        TokenUsage(
+                            project_id=uuid.UUID(project_id),
+                            agent_role=agent_role.value,
+                            model_name=model,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            total_tokens=prompt_tokens + completion_tokens,
+                            cost_usd=cost,
+                        )
                     )
-                )
-                await session.commit()
+                    await session.commit()
+            except Exception as exc:
+                logger.warning("Failed to persist token usage to DB: %s", exc)
 
     async def get_project_usage(self, project_id: str) -> dict[str, Any]:
         if self._session_factory:
-            async with await self._session_factory() as session:
-                stmt = (
-                    select(
-                        TokenUsage.model,
-                        func.sum(TokenUsage.prompt_tokens).label("total_prompt"),
-                        func.sum(TokenUsage.completion_tokens).label("total_completion"),
-                        func.sum(TokenUsage.cost).label("total_cost"),
-                        func.count().label("call_count"),
+            from backend.models.token_usage import TokenUsage
+            try:
+                async with self._session_factory() as session:
+                    stmt = (
+                        select(
+                            TokenUsage.model_name,
+                            func.sum(TokenUsage.prompt_tokens).label("total_prompt"),
+                            func.sum(TokenUsage.completion_tokens).label("total_completion"),
+                            func.sum(TokenUsage.cost_usd).label("total_cost"),
+                            func.count().label("call_count"),
+                        )
+                        .where(TokenUsage.project_id == uuid.UUID(project_id))
+                        .group_by(TokenUsage.model_name)
                     )
-                    .where(TokenUsage.project_id == project_id)
-                    .group_by(TokenUsage.model)
-                )
-                result = await session.execute(stmt)
-                rows = result.all()
-                by_model = {
-                    row.model: {
-                        "prompt_tokens": row.total_prompt,
-                        "completion_tokens": row.total_completion,
-                        "cost": round(row.total_cost, 6),
-                        "calls": row.call_count,
+                    result = await session.execute(stmt)
+                    rows = result.all()
+                    by_model = {
+                        row.model_name: {
+                            "prompt_tokens": row.total_prompt,
+                            "completion_tokens": row.total_completion,
+                            "cost": round(row.total_cost or 0.0, 6),
+                            "calls": row.call_count,
+                        }
+                        for row in rows
                     }
-                    for row in rows
-                }
-                total_cost = sum(m["cost"] for m in by_model.values())
-                return {"project_id": project_id, "by_model": by_model, "total_cost": round(total_cost, 6)}
+                    total_cost = sum(m["cost"] for m in by_model.values())
+                    return {
+                        "project_id": project_id,
+                        "by_model": by_model,
+                        "total_cost": round(total_cost, 6),
+                    }
+            except Exception as exc:
+                logger.warning("Failed to query token usage from DB: %s", exc)
 
         records = [r for r in self._memory_log if r["project_id"] == project_id]
         by_model: dict[str, dict[str, Any]] = {}

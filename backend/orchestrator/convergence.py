@@ -21,7 +21,7 @@ _PHASE_ORDER = [
 
 class Board(Protocol):
     async def get_open_challenge_count(self) -> int: ...
-    async def get_latest_critic_score(self) -> float: ...
+    async def get_phase_critic_score(self, phase: ResearchPhase) -> float: ...
     async def get_recent_revision_count(self, rounds: int) -> int: ...
     async def get_phase_iteration_count(self, phase: ResearchPhase) -> int: ...
 
@@ -64,7 +64,7 @@ class ConvergenceDetector:
         self, board: Board, phase: ResearchPhase
     ) -> ConvergenceSignals:
         open_challenges = await board.get_open_challenge_count()
-        critic_score = await board.get_latest_critic_score()
+        critic_score = await board.get_phase_critic_score(phase)
         revision_count = await board.get_recent_revision_count(
             self._stable_rounds
         )
@@ -96,9 +96,8 @@ class ConvergenceDetector:
 
         no_open = signals.open_challenges == 0
         score_ok = signals.critic_score >= self._min_critic_score
-        stable = signals.recent_revision_count == 0
 
-        return no_open and score_ok and stable
+        return no_open and score_ok
 
     @staticmethod
     def suggest_next_phase(current_phase: ResearchPhase) -> ResearchPhase:

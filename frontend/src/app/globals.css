@@ -1,10 +1,12 @@
 @import "tailwindcss";
 
+/* ── Dark theme (default) ─────────────────────────────────────── */
 :root {
   --aide-bg-primary: #020617;
   --aide-bg-secondary: #0f172a;
   --aide-bg-tertiary: #1e293b;
   --aide-bg-elevated: #334155;
+  --aide-surface: #0f172a;
   --aide-text-primary: #f1f5f9;
   --aide-text-secondary: #94a3b8;
   --aide-text-muted: #64748b;
@@ -15,6 +17,29 @@
   --aide-accent-red: #ef4444;
   --aide-border: #1e293b;
   --aide-border-focus: #3b82f6;
+  --aide-code-bg: #1e293b;
+  --aide-blockquote-border: #3b82f6;
+}
+
+/* ── Light theme ──────────────────────────────────────────────── */
+[data-theme="light"] {
+  --aide-bg-primary: #f8fafc;
+  --aide-bg-secondary: #f1f5f9;
+  --aide-bg-tertiary: #e2e8f0;
+  --aide-bg-elevated: #cbd5e1;
+  --aide-surface: #f1f5f9;
+  --aide-text-primary: #0f172a;
+  --aide-text-secondary: #475569;
+  --aide-text-muted: #94a3b8;
+  --aide-accent-blue: #2563eb;
+  --aide-accent-blue-dim: #1d4ed8;
+  --aide-accent-amber: #d97706;
+  --aide-accent-green: #16a34a;
+  --aide-accent-red: #dc2626;
+  --aide-border: #cbd5e1;
+  --aide-border-focus: #2563eb;
+  --aide-code-bg: #e2e8f0;
+  --aide-blockquote-border: #2563eb;
 }
 
 @theme {
@@ -22,6 +47,7 @@
   --color-aide-bg-secondary: var(--aide-bg-secondary);
   --color-aide-bg-tertiary: var(--aide-bg-tertiary);
   --color-aide-bg-elevated: var(--aide-bg-elevated);
+  --color-aide-surface: var(--aide-surface);
   --color-aide-text-primary: var(--aide-text-primary);
   --color-aide-text-secondary: var(--aide-text-secondary);
   --color-aide-text-muted: var(--aide-text-muted);
@@ -39,33 +65,18 @@
 }
 
 @keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 @keyframes slide-up {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0);   }
 }
 
 @keyframes pulse-subtle {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.7;
-  }
+  0%, 100% { opacity: 1;   }
+  50%       { opacity: 0.7; }
 }
 
 body {
@@ -76,25 +87,57 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
+/* ── Scrollbar ────────────────────────────────────────────────── */
+::-webkit-scrollbar        { width: 6px; height: 6px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: var(--aide-bg-elevated); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--aide-text-muted); }
+*                          { scrollbar-width: thin; scrollbar-color: var(--aide-bg-elevated) transparent; }
 
-::-webkit-scrollbar-track {
-  background: transparent;
+/* ── Markdown content ─────────────────────────────────────────── */
+.md-content {
+  font-size: 0.875rem;
+  line-height: 1.65;
+  color: var(--aide-text-primary);
+  word-break: break-word;
 }
-
-::-webkit-scrollbar-thumb {
-  background: var(--aide-bg-elevated);
+.md-content.md-sub {
+  font-size: 0.75rem;
+  color: var(--aide-text-secondary);
+}
+.md-content p               { margin-bottom: 0.5em; }
+.md-content p:last-child    { margin-bottom: 0; }
+.md-content h1,
+.md-content h2,
+.md-content h3              { font-weight: 600; margin: 0.75em 0 0.25em; }
+.md-content h1              { font-size: 1em; }
+.md-content h2              { font-size: 0.9em; }
+.md-content h3              { font-size: 0.85em; }
+.md-content ul,
+.md-content ol              { padding-left: 1.25em; margin-bottom: 0.5em; }
+.md-content li              { margin-bottom: 0.2em; }
+.md-content strong          { font-weight: 600; }
+.md-content em              { font-style: italic; }
+.md-content code            {
+  background: var(--aide-code-bg);
+  padding: 0.1em 0.3em;
   border-radius: 3px;
+  font-size: 0.8em;
+  font-family: ui-monospace, SFMono-Regular, monospace;
 }
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--aide-text-muted);
+.md-content pre             {
+  background: var(--aide-code-bg);
+  padding: 0.75em 1em;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin-bottom: 0.5em;
 }
-
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--aide-bg-elevated) transparent;
+.md-content pre code        { background: none; padding: 0; font-size: 0.85em; }
+.md-content blockquote      {
+  border-left: 2px solid var(--aide-blockquote-border);
+  padding-left: 0.75em;
+  color: var(--aide-text-secondary);
+  margin: 0.5em 0;
 }
+.md-content a               { color: var(--aide-accent-blue); text-decoration: underline; }
+.md-content hr              { border-color: var(--aide-border); margin: 0.75em 0; }

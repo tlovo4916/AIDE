@@ -1,8 +1,7 @@
-"""Orchestrator planner -- LLM-driven meta-cognitive decision making."""
+"""Orchestrator planner -- rule-based agent sequencing for reliable e2e flow."""
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Protocol, runtime_checkable
 
@@ -10,55 +9,72 @@ from backend.types import (
     AgentRole,
     OrchestratorDecision,
     ResearchPhase,
+    TaskPriority,
 )
-
-from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = """\
-You are the meta-cognitive orchestrator of the AIDE multi-agent research system.
-
-Your job is to observe the current state of the research blackboard and decide
-which agent to invoke next, what task to assign, and whether strategic actions
-(checkpoints, backtracking) are needed.
-
-Available agents:
-- director: Strategic research direction, conflict resolution
-- scientist: Hypothesis generation, methodology design
-- librarian: Literature search, evidence collection
-- writer: Paper composition, revision
-- critic: Quality review, scoring
-
-Research phases (in order):
-1. explore   -- initial literature survey and direction setting
-2. hypothesize -- hypothesis formulation and refinement
-3. evidence  -- evidence gathering and validation
-4. compose   -- paper writing and revision
-5. complete  -- final review and output
-
-Decision guidelines:
-- In early phases, favour librarian and director.
-- When hypotheses exist but lack evidence, invoke librarian.
-- Invoke critic periodically to assess quality.
-- Trigger a checkpoint when a phase is about to transition, or when a
-  strategic pivot is proposed.
-- Suggest backtracking when contradictory evidence or fundamental direction
-  problems are detected.
-
-Respond with a JSON object:
-
-{
-    "agent_to_invoke": "director | scientist | librarian | writer | critic",
-    "task_description": "Specific task for the agent",
-    "task_priority": "critical | normal | exploratory",
-    "allow_subagents": true,
-    "trigger_checkpoint": false,
-    "checkpoint_reason": null,
-    "backtrack_to": null,
-    "rationale": "Why this decision"
+# Per-phase agent rotation sequence (cycles when exhausted)
+_PHASE_SEQUENCES: dict[ResearchPhase, list[AgentRole]] = {
+    ResearchPhase.EXPLORE: [
+        AgentRole.LIBRARIAN,
+        AgentRole.DIRECTOR,
+        AgentRole.LIBRARIAN,
+        AgentRole.CRITIC,
+    ],
+    ResearchPhase.HYPOTHESIZE: [
+        AgentRole.SCIENTIST,
+        AgentRole.DIRECTOR,
+        AgentRole.SCIENTIST,
+        AgentRole.CRITIC,
+    ],
+    ResearchPhase.EVIDENCE: [
+        AgentRole.LIBRARIAN,
+        AgentRole.SCIENTIST,
+        AgentRole.LIBRARIAN,
+        AgentRole.CRITIC,
+    ],
+    ResearchPhase.COMPOSE: [
+        AgentRole.WRITER,
+        AgentRole.CRITIC,
+        AgentRole.WRITER,
+        AgentRole.CRITIC,
+    ],
+    ResearchPhase.COMPLETE: [
+        AgentRole.CRITIC,
+        AgentRole.WRITER,
+        AgentRole.CRITIC,
+        AgentRole.CRITIC,
+    ],
 }
-"""
+
+_PHASE_TASKS: dict[ResearchPhase, dict[AgentRole, str]] = {
+    ResearchPhase.EXPLORE: {
+        AgentRole.LIBRARIAN: "Search and collect foundational literature on the research topic. Identify key papers, authors, methodologies, and open questions.",
+        AgentRole.DIRECTOR: "Review gathered literature and set clear research directions. Define scope, key questions, and success criteria.",
+        AgentRole.SCIENTIST: "Analyze the collected evidence to identify patterns, gaps, and potential hypotheses worth investigating.",
+        AgentRole.CRITIC: "Evaluate the current research state. Assess coverage of the topic, quality of sources, and identify gaps. Assign an overall score (1-10).",
+    },
+    ResearchPhase.HYPOTHESIZE: {
+        AgentRole.SCIENTIST: "Formulate specific, testable hypotheses based on the literature survey. Define variables, expected outcomes, and validation methods.",
+        AgentRole.DIRECTOR: "Review and refine the proposed hypotheses. Prioritize the most promising ones and set research strategy.",
+        AgentRole.CRITIC: "Evaluate the hypotheses for logical soundness, testability, and novelty. Assign an overall score (1-10).",
+        AgentRole.LIBRARIAN: "Search for additional evidence to support or challenge the proposed hypotheses.",
+    },
+    ResearchPhase.EVIDENCE: {
+        AgentRole.LIBRARIAN: "Conduct targeted literature search to gather evidence for the hypotheses. Focus on experimental data and empirical findings.",
+        AgentRole.SCIENTIST: "Analyze collected evidence and assess how well it supports or refutes the hypotheses. Identify remaining gaps.",
+        AgentRole.CRITIC: "Review the evidence quality, methodology rigor, and logical consistency. Assign an overall score (1-10).",
+    },
+    ResearchPhase.COMPOSE: {
+        AgentRole.WRITER: "Write or revise the research paper based on accumulated evidence and hypotheses. Include introduction, methods, results, discussion, and conclusion.",
+        AgentRole.CRITIC: "Review the draft for clarity, structure, argumentation, and academic rigor. Assign an overall score (1-10).",
+    },
+    ResearchPhase.COMPLETE: {
+        AgentRole.CRITIC: "Perform final quality review of the complete paper. Assign an overall score (1-10) and identify any remaining issues.",
+        AgentRole.WRITER: "Address final reviewer comments and polish the paper for submission.",
+    },
+}
 
 
 @runtime_checkable
@@ -69,10 +85,16 @@ class LLMRouter(Protocol):
 
 
 class OrchestratorPlanner:
-    """Uses a high-capability LLM to make meta-cognitive scheduling decisions."""
+    """Rule-based planner: deterministic agent rotation per research phase.
 
-    def __init__(self, llm_router: LLMRouter) -> None:
+    Uses a predefined sequence per phase to guarantee diversity and ensure
+    critic is invoked regularly (needed for score-based convergence).
+    """
+
+    def __init__(self, llm_router: LLMRouter, research_topic: str = "") -> None:
+        # llm_router kept for interface compatibility but not used
         self._llm_router = llm_router
+        self._research_topic = research_topic
 
     async def plan_next_action(
         self,
@@ -80,51 +102,35 @@ class OrchestratorPlanner:
         phase: ResearchPhase,
         iteration: int,
     ) -> OrchestratorDecision:
-        prompt = self._build_prompt(board_state_summary, phase, iteration)
-        raw = await self._llm_router.generate(
-            settings.orchestrator_model, prompt, system_prompt=_SYSTEM_PROMPT
-        )
-        return self._parse_decision(raw)
+        sequence = _PHASE_SEQUENCES.get(phase, [AgentRole.CRITIC])
+        # Use (iteration-1) so iteration=1 maps to sequence[0]
+        agent = sequence[(iteration - 1) % len(sequence)]
 
-    # ------------------------------------------------------------------
+        task_map = _PHASE_TASKS.get(phase, {})
+        base_task = task_map.get(agent, f"Perform your role duties for the {phase.value} phase.")
 
-    @staticmethod
-    def _build_prompt(
-        summary: str, phase: ResearchPhase, iteration: int
-    ) -> str:
-        return (
-            f"## Research State\n\n"
-            f"Phase: {phase.value}\n"
-            f"Iteration: {iteration}\n\n"
-            f"## Blackboard Summary (L0 Panoramic View)\n\n"
-            f"{summary}\n\n"
-            "Based on the current state, decide the next action.\n"
-        )
-
-    @staticmethod
-    def _parse_decision(raw: str) -> OrchestratorDecision:
-        text = raw.strip()
-        for fence in ("```json", "```"):
-            idx = text.find(fence)
-            if idx == -1:
-                continue
-            start = idx + len(fence)
-            end = text.find("```", start)
-            if end == -1:
-                continue
-            text = text[start:end].strip()
-            break
-
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            logger.warning(
-                "Planner returned non-JSON, falling back to critic review"
+        # Always prefix the task with the research topic so agents cannot drift
+        if self._research_topic:
+            task_desc = (
+                f"[RESEARCH TOPIC]: {self._research_topic}\n\n"
+                f"ALL your work MUST focus strictly on the above research topic.\n\n"
+                f"{base_task}"
             )
-            return OrchestratorDecision(
-                agent_to_invoke=AgentRole.CRITIC,
-                task_description="Review current research state and identify gaps",
-                rationale="Fallback: could not parse planner output",
-            )
+        else:
+            task_desc = base_task
 
-        return OrchestratorDecision.model_validate(data)
+        allow_sub = agent in (AgentRole.LIBRARIAN, AgentRole.SCIENTIST)
+
+        logger.info(
+            "[Planner] phase=%s iter=%d seq_pos=%d → agent=%s",
+            phase.value, iteration, (iteration - 1) % len(sequence), agent.value,
+        )
+
+        return OrchestratorDecision(
+            agent_to_invoke=agent,
+            task_description=task_desc,
+            task_priority=TaskPriority.NORMAL,
+            allow_subagents=allow_sub,
+            trigger_checkpoint=False,
+            rationale=f"Rule-based sequence: {phase.value}[{(iteration-1) % len(sequence)}]={agent.value}",
+        )

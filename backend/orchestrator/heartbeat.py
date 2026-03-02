@@ -98,9 +98,10 @@ class HeartbeatMonitor:
     async def snapshot_state(self, board: Board) -> None:
         project_path = board.get_project_path()
         state = await board.serialize()
-        meta_path = project_path / "meta.json"
-        meta_path.parent.mkdir(parents=True, exist_ok=True)
-        meta_path.write_text(
+        # 使用独立文件，避免与 board 的 meta.json 冲突
+        snapshot_path = project_path / "snapshot.json"
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(
             json.dumps(
                 {
                     "snapshot_at": datetime.utcnow().isoformat(),
@@ -108,20 +109,21 @@ class HeartbeatMonitor:
                 },
                 ensure_ascii=False,
                 indent=2,
+                default=str,
             )
         )
-        logger.debug("State snapshot saved to %s", meta_path)
+        logger.debug("State snapshot saved to %s", snapshot_path)
 
     @staticmethod
     def recover_from_snapshot(
         project_path: Path,
     ) -> Optional[dict[str, Any]]:
-        meta_path = project_path / "meta.json"
-        if not meta_path.exists():
-            logger.warning("No snapshot found at %s", meta_path)
+        snapshot_path = project_path / "snapshot.json"
+        if not snapshot_path.exists():
+            logger.warning("No snapshot found at %s", snapshot_path)
             return None
         try:
-            data = json.loads(meta_path.read_text())
+            data = json.loads(snapshot_path.read_text())
             logger.info(
                 "Recovered snapshot from %s",
                 data.get("snapshot_at", "unknown"),

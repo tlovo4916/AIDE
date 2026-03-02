@@ -64,6 +64,19 @@ action_type values:
 - request_info -- request specific data
 - spawn_subagent -- delegate a focused search/verification subtask
 
+{% if research_topic %}
+## ⚠️ RESEARCH TOPIC — THIS IS YOUR SOLE FOCUS
+
+**{{ research_topic }}**
+
+All literature searches, evidence collection, and synthesis MUST focus exclusively on the above research topic.
+If you notice any previous work has drifted off-topic, explicitly correct it and redirect to this topic.
+
+{% endif %}
+## Language Requirement
+
+**IMPORTANT**: All content values you write MUST be in **Simplified Chinese (简体中文)**. JSON keys and technical field names remain in English. This includes: `findings` array items, `rationale`, `reasoning_summary`, `contradictions`, and any other free-text value fields. Source `title` fields may remain in their original language.
+
 ## Current Context
 
 {{ context }}

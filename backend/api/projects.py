@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import json
+import shutil
 import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.models import get_session, Project
 from backend.orchestrator import factory as engine_factory
-from backend.types import ResearchPhase
+from backend.types import ArtifactType, ResearchPhase
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -90,8 +92,99 @@ async def delete_project(
     project = await session.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
+
+    pid = str(project_id)
+    # Stop running engine first
+    engine_factory.stop_engine(pid)
+
+    # Delete DB record
     await session.delete(project)
     await session.commit()
+
+    # Delete filesystem workspace
+    project_path = settings.project_path(pid)
+    if project_path.exists():
+        shutil.rmtree(project_path, ignore_errors=True)
+
+
+@router.get("/{project_id}/blackboard")
+async def get_blackboard(project_id: uuid.UUID) -> dict:
+    """返回项目当前黑板快照（来自文件系统），用于前端页面刷新后恢复状态。"""
+    project_path = settings.project_path(str(project_id))
+    artifacts_dir = project_path / "artifacts"
+    challenges_dir = project_path / "challenges"
+    messages_dir = project_path / "messages"
+
+    # 读取各类型 artifacts
+    artifacts: dict[str, list] = {}
+    if artifacts_dir.exists():
+        for at in ArtifactType:
+            type_dir = artifacts_dir / at.value
+            if not type_dir.exists():
+                continue
+            items = []
+            for artifact_dir in sorted(type_dir.iterdir()):
+                if not artifact_dir.is_dir():
+                    continue
+                meta_path = artifact_dir / "meta.json"
+                if not meta_path.exists():
+                    continue
+                try:
+                    meta = json.loads(meta_path.read_text())
+                    if meta.get("superseded"):
+                        continue
+                    # 读最新版本内容
+                    versions = sorted(
+                        [d for d in artifact_dir.iterdir() if d.is_dir() and d.name.startswith("v")],
+                        key=lambda d: int(d.name[1:]) if d.name[1:].isdigit() else 0,
+                    )
+                    content = ""
+                    if versions:
+                        l2 = versions[-1] / "l2.json"
+                        if l2.exists():
+                            content = l2.read_text()
+                    items.append({
+                        "id": meta.get("artifact_id", artifact_dir.name),
+                        "type": at.value,
+                        "data": {"content": content, **meta},
+                    })
+                except Exception:
+                    continue
+            if items:
+                artifacts[at.value] = items
+
+    # 读取 challenges
+    challenges = []
+    if challenges_dir.exists():
+        for f in sorted(challenges_dir.glob("*.json")):
+            try:
+                data = json.loads(f.read_text())
+                challenges.append({
+                    "id": data.get("challenge_id", f.stem),
+                    "from": data.get("challenger", ""),
+                    "message": data.get("argument", ""),
+                    "resolved": data.get("status", "") == "resolved",
+                })
+            except Exception:
+                continue
+
+    # 读取最近 messages（最多 50 条）
+    messages = []
+    if messages_dir.exists():
+        msg_files = sorted(messages_dir.glob("*.json"))[-50:]
+        for f in msg_files:
+            try:
+                data = json.loads(f.read_text())
+                messages.append({
+                    "id": data.get("message_id", f.stem),
+                    "role": data.get("from_agent", ""),
+                    "content": data.get("content", ""),
+                    "timestamp": data.get("created_at", ""),
+                })
+            except Exception:
+                continue
+
+    return {"artifacts": artifacts, "challenges": challenges, "messages": messages}
 
 
 @router.post("/{project_id}/start", response_model=ProjectOut)
@@ -102,10 +195,12 @@ async def start_project(
     project = await session.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
-    if project.status not in ("active", "paused"):
+    pid = str(project_id)
+    # 允许 "running" 状态下引擎已死时重新启动
+    dead_engine = project.status == "running" and not engine_factory.is_running(pid)
+    if project.status not in ("active", "paused") and not dead_engine:
         raise HTTPException(400, "Project cannot be started in current state")
 
-    pid = str(project_id)
     if engine_factory.is_running(pid):
         raise HTTPException(409, "Research loop is already running")
 
@@ -144,10 +239,11 @@ async def resume_project(
     project = await session.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
-    if project.status != "paused":
-        raise HTTPException(400, "Project is not paused")
-
     pid = str(project_id)
+    # 允许 "running" 状态下引擎已死时恢复
+    dead_engine = project.status == "running" and not engine_factory.is_running(pid)
+    if project.status != "paused" and not dead_engine:
+        raise HTTPException(400, "Project is not paused")
     if engine_factory.is_running(pid):
         raise HTTPException(409, "Research loop is already running")
 

@@ -73,28 +73,55 @@ export interface ArtifactUpdatedPayload {
   data: Record<string, unknown>;
 }
 
+export interface AgentStartedPayload {
+  agent: string;
+  task: string;
+  phase: string;
+  iteration: number;
+  timestamp: string;
+}
+
+export interface AgentErrorPayload {
+  agent: string;
+  error: string;
+  iteration: number;
+}
+
+export interface TopicDriftWarningPayload {
+  iteration: number;
+  research_topic: string;
+  match_ratio: number;
+  message: string;
+}
+
 // Union of all push event names
 export type WSPushEvent =
   | "CheckpointCreated"
   | "CheckpointResolved"
   | "PhaseAdvanced"
   | "Backtrack"
+  | "AgentStarted"
   | "AgentActivity"
+  | "AgentError"
   | "SubAgentSpawned"
   | "SubAgentCompleted"
   | "ChallengeRaised"
   | "ChallengeResolved"
-  | "ArtifactUpdated";
+  | "ArtifactUpdated"
+  | "TopicDriftWarning";
 
 export type WSPushPayloadMap = {
   CheckpointCreated: CheckpointCreatedPayload;
   CheckpointResolved: CheckpointResolvedPayload;
   PhaseAdvanced: PhaseAdvancedPayload;
   Backtrack: BacktrackPayload;
+  AgentStarted: AgentStartedPayload;
   AgentActivity: AgentActivityPayload;
+  AgentError: AgentErrorPayload;
   SubAgentSpawned: SubAgentSpawnedPayload;
   SubAgentCompleted: SubAgentCompletedPayload;
   ChallengeRaised: ChallengeRaisedPayload;
   ChallengeResolved: ChallengeResolvedPayload;
   ArtifactUpdated: ArtifactUpdatedPayload;
+  TopicDriftWarning: TopicDriftWarningPayload;
 };

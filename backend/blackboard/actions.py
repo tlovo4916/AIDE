@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime
@@ -89,7 +90,23 @@ class ActionExecutor:
         action: BlackboardAction, board: Blackboard
     ) -> None:
         c = action.content
-        artifact_type = ArtifactType(c.get("artifact_type", action.target))
+        _ROLE_DEFAULT: dict[AgentRole, ArtifactType] = {
+            AgentRole.DIRECTOR: ArtifactType.DIRECTIONS,
+            AgentRole.SCIENTIST: ArtifactType.HYPOTHESES,
+            AgentRole.LIBRARIAN: ArtifactType.EVIDENCE_FINDINGS,
+            AgentRole.WRITER: ArtifactType.OUTLINE,
+            AgentRole.CRITIC: ArtifactType.REVIEW,
+        }
+        raw_type = c.get("artifact_type", action.target)
+        try:
+            artifact_type = ArtifactType(raw_type)
+        except ValueError:
+            artifact_type = _ROLE_DEFAULT.get(action.agent_role, ArtifactType.EVIDENCE_FINDINGS)
+            logger.warning(
+                "_exec_write_artifact: invalid artifact_type %r from %s, "
+                "falling back to %s",
+                raw_type, action.agent_role.value, artifact_type.value,
+            )
         artifact_id = c.get("artifact_id", str(uuid.uuid4()))
         version = c.get(
             "version",
@@ -106,7 +123,7 @@ class ActionExecutor:
             artifact_type=artifact_type,
             artifact_id=artifact_id,
             version=version,
-            content_l2=c.get("content_l2", ""),
+            content_l2=c.get("content_l2") or json.dumps(c, ensure_ascii=False),
             meta=meta,
         )
 

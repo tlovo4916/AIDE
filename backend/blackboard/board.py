@@ -55,7 +55,7 @@ class Blackboard:
     # Workspace lifecycle
     # ------------------------------------------------------------------
 
-    async def init_workspace(self) -> None:
+    async def init_workspace(self, research_topic: str = "") -> None:
         self._root.mkdir(parents=True, exist_ok=True)
         for d in _BOARD_DIRS:
             (self._root / d).mkdir(parents=True, exist_ok=True)
@@ -65,7 +65,14 @@ class Blackboard:
             await self._write_json(self._meta_path, {
                 "created_at": datetime.utcnow().isoformat(),
                 "phase": "explore",
+                "research_topic": research_topic,
             })
+        elif research_topic:
+            # Ensure research_topic is persisted even on restart
+            meta = await self.get_project_meta()
+            if not meta.get("research_topic"):
+                meta["research_topic"] = research_topic
+                await self._write_json(self._meta_path, meta)
 
     # ------------------------------------------------------------------
     # Artifacts
@@ -315,6 +322,16 @@ class Blackboard:
         meta = await self.get_project_meta()
         phase = meta.get("phase", "explore")
         iteration = meta.get("iteration", 0)
+        research_topic = meta.get("research_topic", "")
+
+        # Always show research topic prominently at the top to prevent drift
+        if research_topic:
+            lines.append(
+                "## ⚠️ RESEARCH TOPIC — ALL WORK MUST STAY ON THIS TOPIC\n"
+                f"{research_topic}\n"
+                "---"
+            )
+
         lines.append(f"Phase: {phase} | Iteration: {iteration}")
 
         for at in ArtifactType:
@@ -327,8 +344,8 @@ class Blackboard:
                 if ver == 0:
                     continue
                 content = await self.read_artifact(at, m.artifact_id, ver, level)
-                text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)[:300] if content else "(empty)"
-                lines.append(f"  - {m.artifact_id} v{ver}: {text[:200]}")
+                text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)[:600] if content else "(empty)"
+                lines.append(f"  - {m.artifact_id} v{ver}: {text[:500]}")
 
         open_ch = await self.get_open_challenges()
         if open_ch:
@@ -361,12 +378,36 @@ class Blackboard:
         ver = await self.get_latest_version(ArtifactType.REVIEW, latest.artifact_id)
         if ver == 0:
             return 0.0
+        # Try L1 first (structured summary with overall_score key)
         l1 = await self.read_artifact(ArtifactType.REVIEW, latest.artifact_id, ver, ContextLevel.L1)
         if isinstance(l1, dict):
-            score = l1.get("overall_score")
+            score = l1.get("overall_score") or l1.get("score")
             if isinstance(score, (int, float)):
                 return float(score)
+        # Fall back to L2 raw content (critic writes {"score": N, ...})
+        l2_raw = await self.read_artifact(ArtifactType.REVIEW, latest.artifact_id, ver, ContextLevel.L2)
+        if isinstance(l2_raw, str):
+            try:
+                data = json.loads(l2_raw)
+                score = data.get("score") or data.get("overall_score")
+                if isinstance(score, (int, float)):
+                    return float(score)
+            except Exception:
+                pass
         return 0.0
+
+    async def get_phase_critic_score(self, phase: ResearchPhase) -> float:
+        """Return the critic score recorded for this specific phase (0.0 if none)."""
+        meta = await self.get_project_meta()
+        phase_scores = meta.get("phase_critic_scores", {})
+        return float(phase_scores.get(phase.value, 0.0))
+
+    async def set_phase_critic_score(self, phase: ResearchPhase, score: float) -> None:
+        """Persist the critic score for a specific phase."""
+        meta = await self.get_project_meta()
+        phase_scores = meta.get("phase_critic_scores", {})
+        phase_scores[phase.value] = score
+        await self.update_project_meta(phase_critic_scores=phase_scores)
 
     async def get_recent_revision_count(self, rounds: int) -> int:
         """Count artifacts that have version > 1 (indicating revisions)."""
@@ -382,6 +423,14 @@ class Blackboard:
         meta = await self.get_project_meta()
         phase_iters = meta.get("phase_iterations", {})
         return phase_iters.get(phase.value, 0)
+
+    async def increment_phase_iteration(self, phase: ResearchPhase) -> int:
+        meta = await self.get_project_meta()
+        phase_iters = meta.get("phase_iterations", {})
+        new_val = phase_iters.get(phase.value, 0) + 1
+        phase_iters[phase.value] = new_val
+        await self.update_project_meta(phase_iterations=phase_iters)
+        return new_val
 
     async def get_artifacts_since_phase(self, phase: ResearchPhase) -> list[str]:
         """List artifact IDs from the current or given phase."""

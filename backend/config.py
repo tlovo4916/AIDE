@@ -37,7 +37,14 @@ class Settings(BaseSettings):
     summarizer_model: str = "deepseek-chat"
 
     # -- Per-agent model overrides (role -> model string) --
-    agent_model_overrides: dict[str, str] = Field(default_factory=dict)
+    agent_model_overrides: dict[str, str] = Field(
+        default_factory=lambda: {
+            "scientist": "deepseek-chat",
+            "librarian": "deepseek-chat",
+            "writer": "deepseek-chat",
+            "critic": "deepseek-chat",
+        }
+    )
 
     # -- ChromaDB --
     chroma_persist_dir: Path = Path("workspace/.chroma")
@@ -63,8 +70,8 @@ class Settings(BaseSettings):
     history_ratio: float = 0.07
 
     # -- Orchestrator --
-    max_iterations_per_phase: int = 20
-    convergence_min_critic_score: float = 7.0
+    max_iterations_per_phase: int = 4
+    convergence_min_critic_score: float = 6.0
     convergence_stable_rounds: int = 3
     heartbeat_interval_seconds: int = 60
 

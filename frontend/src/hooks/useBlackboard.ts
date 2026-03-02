@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useTypedWebSocket } from "./useTypedWebSocket";
 import type {
   ArtifactUpdatedPayload,
   ChallengeRaisedPayload,
   ChallengeResolvedPayload,
   PhaseAdvancedPayload,
+  WSPushEvent,
+  WSPushPayloadMap,
 } from "@/lib/ws-protocol";
+import { getBlackboard } from "@/lib/api";
 
 interface Artifact {
   id: string;
@@ -37,8 +39,16 @@ interface BlackboardState {
   isLoading: boolean;
 }
 
-export function useBlackboard(projectId: string) {
-  const ws = useTypedWebSocket(projectId);
+type WsHook = {
+  status: string;
+  subscribe: <E extends WSPushEvent>(
+    event: E,
+    callback: (payload: WSPushPayloadMap[E]) => void
+  ) => () => void;
+  send: (event: string, payload: unknown, requestId?: string) => void;
+};
+
+export function useBlackboard(ws: WsHook, projectId: string) {
   const [state, setState] = useState<BlackboardState>({
     artifacts: {},
     messages: [],
@@ -47,12 +57,29 @@ export function useBlackboard(projectId: string) {
     isLoading: true,
   });
 
+  // 页面挂载时从 REST 端点加载历史状态（支持刷新后恢复）
+  useEffect(() => {
+    if (!projectId) return;
+    getBlackboard(projectId)
+      .then((snapshot) => {
+        setState((prev) => ({
+          ...prev,
+          artifacts: snapshot.artifacts as Record<string, Artifact[]>,
+          challenges: snapshot.challenges,
+          messages: snapshot.messages,
+          isLoading: false,
+        }));
+      })
+      .catch(() => {
+        setState((prev) => ({ ...prev, isLoading: false }));
+      });
+  }, [projectId]);
+
   const initialLoadDone = useRef(false);
 
   useEffect(() => {
     if (ws.status === "connected" && !initialLoadDone.current) {
       initialLoadDone.current = true;
-      setState((prev) => ({ ...prev, isLoading: false }));
     }
   }, [ws.status]);
 

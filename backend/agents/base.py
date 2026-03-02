@@ -58,10 +58,14 @@ class BaseAgent(ABC):
     can_spawn_subagents: bool
 
     def __init__(
-        self, llm_router: LLMRouter, write_back_guard: WriteBackGuard
+        self,
+        llm_router: LLMRouter,
+        write_back_guard: WriteBackGuard,
+        research_topic: str = "",
     ) -> None:
         self._llm_router = llm_router
         self._write_back_guard = write_back_guard
+        self._research_topic = research_topic
         self._jinja_env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(str(_PROMPTS_DIR)),
             autoescape=False,
@@ -113,6 +117,7 @@ class BaseAgent(ABC):
             primary_artifacts=[a.value for a in self.primary_artifact_types],
             dependency_artifacts=[a.value for a in self.dependency_artifact_types],
             can_spawn=self.can_spawn_subagents,
+            research_topic=self._research_topic,
             context=context,
             task=format_task(task),
         )
@@ -134,8 +139,20 @@ class BaseAgent(ABC):
 
         for action in data.get("actions", []):
             action.setdefault("agent_role", self.role.value)
+            # LLM 有时将 content 返回为字符串而非 dict，自动修正
+            if isinstance(action.get("content"), str):
+                action["content"] = {"text": action["content"]}
+            elif not isinstance(action.get("content"), dict):
+                action["content"] = {}
 
-        return AgentResponse.model_validate(data)
+        try:
+            return AgentResponse.model_validate(data)
+        except Exception as exc:
+            logger.warning(
+                "Agent %s: AgentResponse validation failed (%s), returning summary",
+                self.role.value, exc,
+            )
+            return AgentResponse(reasoning_summary=raw[:500])
 
 
 # ------------------------------------------------------------------

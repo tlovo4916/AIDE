@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Protocol
 
@@ -13,6 +15,7 @@ from backend.orchestrator.convergence import ConvergenceDetector
 from backend.orchestrator.heartbeat import HeartbeatMonitor
 from backend.orchestrator.planner import OrchestratorPlanner
 from backend.types import (
+    ActionType,
     AgentRole,
     AgentTask,
     BlackboardAction,
@@ -26,6 +29,7 @@ from backend.types import (
 logger = logging.getLogger(__name__)
 
 WSBroadcast = Callable[[str, dict[str, Any]], Coroutine[Any, Any, None]]
+PhaseChangeCallback = Callable[[str], Coroutine[Any, Any, None]]  # receives new phase value
 
 
 class Board(Protocol):
@@ -38,9 +42,13 @@ class Board(Protocol):
     ) -> list[BlackboardAction]: ...
     async def get_open_challenges(self) -> list[ChallengeRecord]: ...
     async def get_open_challenge_count(self) -> int: ...
-    async def get_latest_critic_score(self) -> float: ...
+    async def get_phase_critic_score(self, phase: ResearchPhase) -> float: ...
+    async def set_phase_critic_score(self, phase: ResearchPhase, score: float) -> None: ...
     async def get_recent_revision_count(self, rounds: int) -> int: ...
     async def get_phase_iteration_count(
+        self, phase: ResearchPhase
+    ) -> int: ...
+    async def increment_phase_iteration(
         self, phase: ResearchPhase
     ) -> int: ...
     async def get_artifacts_since_phase(
@@ -48,6 +56,7 @@ class Board(Protocol):
     ) -> list[str]: ...
     async def mark_superseded(self, artifact_id: str) -> None: ...
     async def update_meta(self, key: str, value: object) -> None: ...
+    async def get_project_meta(self) -> dict[str, Any]: ...
     async def has_contradictory_evidence(self) -> bool: ...
     async def has_logic_gaps(self) -> bool: ...
     async def has_direction_issues(self) -> bool: ...
@@ -104,6 +113,7 @@ class OrchestrationEngine:
         checkpoint_mgr: CheckpointManager,
         heartbeat: HeartbeatMonitor,
         ws_broadcast: WSBroadcast,
+        on_phase_change: PhaseChangeCallback | None = None,
     ) -> None:
         self._project_id = project_id
         self._board = board
@@ -114,11 +124,13 @@ class OrchestrationEngine:
         self._checkpoint_mgr = checkpoint_mgr
         self._heartbeat = heartbeat
         self._ws_broadcast = ws_broadcast
+        self._on_phase_change = on_phase_change
         self._subagent_pool: SubAgentPool | None = None
 
         self._running = False
         self._phase = ResearchPhase.EXPLORE
         self._iteration = 0
+        self._research_topic = ""
 
     def set_subagent_pool(self, pool: SubAgentPool) -> None:
         self._subagent_pool = pool
@@ -129,13 +141,31 @@ class OrchestrationEngine:
 
     async def run(self) -> None:
         self._running = True
-        logger.info("[Engine] Starting run loop for project %s", self._project_id)
+
+        # Restore phase, iteration, and research_topic from persisted meta
+        meta = await self._board.get_project_meta()
+        saved_phase = meta.get("phase", ResearchPhase.EXPLORE.value)
+        try:
+            self._phase = ResearchPhase(saved_phase)
+        except ValueError:
+            self._phase = ResearchPhase.EXPLORE
+        phase_iters = meta.get("phase_iterations", {})
+        self._iteration = phase_iters.get(self._phase.value, 0)
+        self._research_topic = meta.get("research_topic", "")
+
+        logger.info(
+            "[Engine] Starting run loop for project %s (restored phase=%s, iter_done=%d, topic=%r)",
+            self._project_id, self._phase.value, self._iteration,
+            self._research_topic[:60] if self._research_topic else "",
+        )
         await self._heartbeat.start(self._project_id, self._board)
 
         try:
             while self._running and self._phase != ResearchPhase.COMPLETE:
                 self._iteration += 1
                 self._heartbeat.record_activity(self._project_id)
+                await self._board.update_meta("iteration", self._iteration)
+                await self._board.update_meta("phase", self._phase.value)
                 logger.info(
                     "[Engine] === Iteration %d | phase=%s | project=%s ===",
                     self._iteration, self._phase.value, self._project_id,
@@ -145,6 +175,10 @@ class OrchestrationEngine:
                 logger.info("[Engine] Building state summary...")
                 summary = await self._build_state_summary(self._board)
                 logger.info("[Engine] State summary length: %d chars", len(summary))
+
+                # 1b. Per-iteration on-topic check (log warning if research seems to drift)
+                if self._research_topic and self._iteration > 1:
+                    await self._check_on_topic(summary)
 
                 # 2. Plan next action
                 logger.info("[Engine] Calling planner...")
@@ -176,45 +210,108 @@ class OrchestrationEngine:
 
                 # 4. Backtrack if requested
                 if decision.backtrack_to:
+                    prev_phase = self._phase
                     await self._backtrack.execute_backtrack(
                         self._board, decision.backtrack_to
                     )
                     self._phase = decision.backtrack_to
                     await self._ws_broadcast(
-                        "phase_change",
+                        "Backtrack",
                         {
-                            "project_id": self._project_id,
-                            "phase": self._phase.value,
-                            "reason": "backtrack",
+                            "from_phase": prev_phase.value,
+                            "to_phase": self._phase.value,
+                            "reason": "planned",
                         },
                     )
                     continue
 
-                # 5-6. Dispatch agent -> get actions
-                actions = await self._dispatch_agent(decision)
+                # 5. 通知前端 agent 已开始（立即反馈）
+                await self._ws_broadcast(
+                    "AgentStarted",
+                    {
+                        "agent": decision.agent_to_invoke.value,
+                        "task": decision.task_description[:200],
+                        "phase": self._phase.value,
+                        "iteration": self._iteration,
+                        "timestamp": datetime.utcnow().isoformat(),
+                    },
+                )
+
+                # 6. Dispatch agent -> get actions (带总超时，防止 LLM 调用永久挂起)
+                try:
+                    actions = await asyncio.wait_for(
+                        self._dispatch_agent(decision), timeout=300.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(
+                        "[Engine] Agent %s timed out after 300s on iteration %d",
+                        decision.agent_to_invoke.value, self._iteration,
+                    )
+                    await self._ws_broadcast(
+                        "AgentError",
+                        {
+                            "agent": decision.agent_to_invoke.value,
+                            "error": "Agent timed out after 300s",
+                            "iteration": self._iteration,
+                        },
+                    )
+                    # Still count the iteration to prevent infinite loops on repeated timeouts
+                    await self._board.increment_phase_iteration(self._phase)
+                    continue
 
                 # 7. Dedup check
                 actions = await self._board.dedup_check(actions)
 
                 # Write validated actions to blackboard
+                artifact_updates: list[dict[str, Any]] = []
                 for action in actions:
-                    await self._board.apply_action(action)
+                    try:
+                        await self._board.apply_action(action)
+                    except Exception as act_err:
+                        logger.warning(
+                            "[Engine] Skipping action %s from %s: %s",
+                            action.action_type.value, action.agent_role.value, act_err,
+                        )
+                        continue
+                    if action.action_type == ActionType.WRITE_ARTIFACT:
+                        artifact_updates.append({
+                            "artifact_type": action.content.get(
+                                "artifact_type", action.target
+                            ),
+                            "artifact_id": action.content.get("artifact_id", ""),
+                            "action": "created",
+                            "data": action.content,
+                        })
+                        # Capture critic score per phase so convergence is phase-scoped
+                        art_type = action.content.get("artifact_type", action.target)
+                        if art_type == "review":
+                            score = action.content.get("score")
+                            if isinstance(score, (int, float)):
+                                await self._board.set_phase_critic_score(
+                                    self._phase, float(score)
+                                )
 
                 await self._ws_broadcast(
-                    "board_update",
+                    "AgentActivity",
                     {
-                        "project_id": self._project_id,
-                        "actions_count": len(actions),
                         "agent": decision.agent_to_invoke.value,
-                        "phase": self._phase.value,
-                        "iteration": self._iteration,
+                        "action": decision.task_description[:200],
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "metadata": {
+                            "iteration": self._iteration,
+                            "actions": len(actions),
+                            "phase": self._phase.value,
+                        },
                     },
                 )
+                for upd in artifact_updates:
+                    await self._ws_broadcast("ArtifactUpdated", upd)
 
                 # 8. Handle challenges
                 await self._handle_challenges(self._board)
 
                 # 9. Convergence check
+                await self._board.increment_phase_iteration(self._phase)
                 signals = await self._convergence.check(
                     self._board, self._phase
                 )
@@ -223,16 +320,17 @@ class OrchestrationEngine:
                     self._board, self._phase, signals
                 )
                 if backtrack_to:
+                    prev_phase = self._phase
                     await self._backtrack.execute_backtrack(
                         self._board, backtrack_to
                     )
                     self._phase = backtrack_to
                     await self._ws_broadcast(
-                        "phase_change",
+                        "Backtrack",
                         {
-                            "project_id": self._project_id,
-                            "phase": self._phase.value,
-                            "reason": "auto_backtrack",
+                            "from_phase": prev_phase.value,
+                            "to_phase": self._phase.value,
+                            "reason": "auto",
                         },
                     )
                 elif signals.is_converged:
@@ -327,13 +425,12 @@ class OrchestrationEngine:
 
         for ch in challenges:
             await self._ws_broadcast(
-                "challenge",
+                "ChallengeRaised",
                 {
-                    "project_id": self._project_id,
-                    "challenge_id": ch.challenge_id,
-                    "challenger": ch.challenger.value,
-                    "target_artifact": ch.target_artifact,
-                    "argument": ch.argument,
+                    "id": ch.challenge_id,
+                    "from": ch.challenger.value,
+                    "target": ch.target_artifact,
+                    "message": ch.argument,
                 },
             )
         return True
@@ -351,16 +448,56 @@ class OrchestrationEngine:
             current_phase.value,
             next_phase.value,
         )
+        # Persist the new phase immediately so crash-restart restores correctly
+        await board.update_meta("phase", next_phase.value)
         await self._ws_broadcast(
-            "phase_change",
+            "PhaseAdvanced",
             {
-                "project_id": self._project_id,
                 "from_phase": current_phase.value,
-                "to_phase": next_phase.value,
+                "phase": next_phase.value,
             },
         )
+        if self._on_phase_change:
+            await self._on_phase_change(next_phase.value)
         return next_phase
+
+    async def _check_on_topic(self, summary: str) -> None:
+        """Warn via WS if the state summary appears to be off the research topic."""
+        if not self._research_topic:
+            return
+        topic_words = set(self._research_topic.lower().split())
+        # Remove very short/common words
+        topic_words = {w for w in topic_words if len(w) > 2}
+        if not topic_words:
+            return
+        summary_lower = summary.lower()
+        matched = sum(1 for w in topic_words if w in summary_lower)
+        match_ratio = matched / len(topic_words)
+        if match_ratio < 0.2:
+            logger.warning(
+                "[Engine] ON-TOPIC CHECK FAILED at iteration %d: "
+                "only %.0f%% of topic keywords found in state summary. "
+                "Research may have drifted from: %r",
+                self._iteration, match_ratio * 100, self._research_topic[:80],
+            )
+            await self._ws_broadcast(
+                "TopicDriftWarning",
+                {
+                    "iteration": self._iteration,
+                    "research_topic": self._research_topic,
+                    "match_ratio": round(match_ratio, 2),
+                    "message": (
+                        f"Research may be drifting from the intended topic: "
+                        f"{self._research_topic[:100]}"
+                    ),
+                },
+            )
+        else:
+            logger.debug(
+                "[Engine] On-topic check passed (%.0f%% keyword match)",
+                match_ratio * 100,
+            )
 
     @staticmethod
     async def _build_state_summary(board: Board) -> str:
-        return await board.get_state_summary(ContextLevel.L0)
+        return await board.get_state_summary(ContextLevel.L2)

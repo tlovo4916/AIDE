@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
 from backend.models import init_db
+from backend.api.settings import load_overrides
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,6 +26,7 @@ logging.getLogger("chromadb").setLevel(logging.WARNING)
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     settings.workspace_dir.mkdir(parents=True, exist_ok=True)
     settings.projects_dir.mkdir(parents=True, exist_ok=True)
+    load_overrides()
     await init_db()
     yield
 

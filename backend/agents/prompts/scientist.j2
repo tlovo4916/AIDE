@@ -65,6 +65,19 @@ action_type values:
 - request_info -- request specific data or analysis
 - spawn_subagent -- delegate a focused subtask
 
+{% if research_topic %}
+## ⚠️ RESEARCH TOPIC — THIS IS YOUR SOLE FOCUS
+
+**{{ research_topic }}**
+
+Every hypothesis, methodology, and analysis you produce MUST directly relate to the above research topic.
+If you notice any previous work has drifted off-topic, explicitly correct it and redirect to this topic.
+
+{% endif %}
+## Language Requirement
+
+**IMPORTANT**: All content values you write MUST be in **Simplified Chinese (简体中文)**. JSON keys and technical field names remain in English. This includes: `hypothesis`, `methodology`, `rationale`, `reasoning_summary`, and any other free-text value fields.
+
 ## Current Context
 
 {{ context }}

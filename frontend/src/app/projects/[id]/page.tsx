@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { Markdown } from "@/components/ui/markdown";
+import { useParams, useRouter } from "next/navigation";
 import {
   Play,
   Pause,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   AlertTriangle,
   FileText,
   Lightbulb,
@@ -16,6 +19,7 @@ import {
   Loader2,
   ArrowLeft,
   X,
+  Trash2,
 } from "lucide-react";
 import Link from "next/link";
 import {
@@ -24,6 +28,7 @@ import {
   startProject,
   pauseProject,
   resumeProject,
+  deleteProject,
 } from "@/lib/api";
 import { useTypedWebSocket } from "@/hooks/useTypedWebSocket";
 import { useBlackboard } from "@/hooks/useBlackboard";
@@ -36,7 +41,7 @@ interface Project {
   id: string;
   name: string;
   research_topic: string;
-  current_phase: string;
+  phase: string;
   status: string;
 }
 
@@ -65,13 +70,64 @@ const PHASES = [
 const ARTIFACT_SECTIONS = [
   { type: "directions", label: "Research Directions", icon: Search },
   { type: "hypotheses", label: "Hypotheses", icon: Lightbulb },
-  { type: "evidence", label: "Evidence", icon: FileText },
+  { type: "evidence_findings", label: "Evidence", icon: FileText },
   { type: "outline", label: "Outline", icon: BookOpen },
   { type: "draft", label: "Draft", icon: PenTool },
   { type: "review", label: "Review", icon: CheckCircle2 },
 ] as const;
 
 type ArtifactType = (typeof ARTIFACT_SECTIONS)[number]["type"];
+
+function getArtifactDisplay(data: Record<string, unknown>): { main: string; sub?: string } {
+  // REST endpoint stores content as JSON string in data.content
+  let d = data;
+  if (typeof data.content === "string" && data.content.trim().startsWith("{")) {
+    try { d = JSON.parse(data.content) as Record<string, unknown>; } catch { /* use d as-is */ }
+  }
+
+  // Librarian: {findings: [...], sources: [...]}
+  if (Array.isArray(d.findings) && (d.findings as unknown[]).length > 0) {
+    const lines = (d.findings as unknown[]).map(f => typeof f === "string" ? f : JSON.stringify(f));
+    return { main: lines.join("\n") };
+  }
+  // Director: {title, body}
+  if (typeof d.title === "string" && d.title) {
+    return { main: d.title, sub: typeof d.body === "string" ? d.body : undefined };
+  }
+  // Scientist: {hypothesis, methodology}
+  if (typeof d.hypothesis === "string" && d.hypothesis) {
+    return { main: d.hypothesis, sub: typeof d.methodology === "string" ? d.methodology : undefined };
+  }
+  // Critic: {score, strengths, weaknesses}
+  if (typeof d.score !== "undefined") {
+    const weaknesses = Array.isArray(d.weaknesses) ? (d.weaknesses as unknown[]).join("\n") : "";
+    const strengths = Array.isArray(d.strengths) ? (d.strengths as unknown[]).join("\n") : "";
+    const sub = [strengths && `Strengths:\n${strengths}`, weaknesses && `Weaknesses:\n${weaknesses}`].filter(Boolean).join("\n\n");
+    return { main: `Score: ${d.score}/10`, sub: sub || undefined };
+  }
+  // Writer: {section, text}
+  if (typeof d.text === "string" && d.text) {
+    return { main: d.text };
+  }
+  if (typeof d.section === "string" && d.section) {
+    return { main: d.section };
+  }
+  // Fallback: any non-empty string field
+  const skip = new Set(["artifact_id", "artifact_type", "created_by", "version", "tags", "superseded", "content", "created_at", "updated_at", "active_count"]);
+  for (const [k, v] of Object.entries(d)) {
+    if (skip.has(k)) continue;
+    if (typeof v === "string" && v) return { main: `${k}: ${v}` };
+    if (Array.isArray(v) && (v as unknown[]).length > 0) {
+      return { main: `${k}:\n${(v as unknown[]).join("\n")}` };
+    }
+  }
+  // No content fields found — show readable placeholder
+  const artType = typeof data.artifact_type === "string"
+    ? data.artifact_type.replace(/_/g, " ")
+    : "";
+  const ver = typeof data.version === "number" ? ` v${data.version}` : "";
+  return { main: artType ? `(${artType}${ver} — no content stored)` : "(no content)" };
+}
 
 function PhaseProgress({
   currentPhase,
@@ -133,7 +189,7 @@ function ActivityFeed({ events }: { events: AgentEvent[] }) {
               <div className="flex items-center justify-between">
                 <Badge variant="agent">{evt.agent}</Badge>
                 <span className="text-aide-text-muted">
-                  {new Date(evt.timestamp).toLocaleTimeString()}
+                  {parseTS(evt.timestamp).toLocaleTimeString()}
                 </span>
               </div>
               <p className="mt-1 text-aide-text-secondary">{evt.action}</p>
@@ -142,6 +198,58 @@ function ActivityFeed({ events }: { events: AgentEvent[] }) {
         </div>
       )}
     </div>
+  );
+}
+
+const COLLAPSE_THRESHOLD = 300; // chars; cards shorter than this are never collapsible
+
+/** Parse a UTC ISO timestamp from backend (may lack trailing Z). */
+function parseTS(ts: string): Date {
+  if (ts && !ts.endsWith("Z") && !/[+-]\d{2}:\d{2}$/.test(ts)) {
+    return new Date(ts + "Z");
+  }
+  return new Date(ts);
+}
+
+function ArtifactCard({ item }: { item: unknown }) {
+  const artifact = item as { id: string; type: string; data: Record<string, unknown> };
+  const { main, sub } = getArtifactDisplay(artifact.data ?? {});
+  const author = typeof artifact.data?.created_by === "string" ? artifact.data.created_by : undefined;
+
+  const totalLen = main.length + (sub?.length ?? 0);
+  const collapsible = totalLen > COLLAPSE_THRESHOLD;
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <Card variant="default" className="animate-slide-up">
+      <CardContent className="py-3">
+        {author && (
+          <div className="mb-1.5">
+            <Badge variant="agent">{author}</Badge>
+          </div>
+        )}
+        <Markdown className={`md-content${collapsible && !expanded ? " line-clamp-4" : ""}`}>
+          {main}
+        </Markdown>
+        {sub && (
+          <Markdown className={`md-content md-sub mt-2${collapsible && !expanded ? " line-clamp-2" : ""}`}>
+            {sub}
+          </Markdown>
+        )}
+        {collapsible && (
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="mt-2 flex items-center gap-1 text-xs text-aide-accent-blue hover:opacity-70 transition-opacity"
+          >
+            {expanded ? (
+              <><ChevronUp className="h-3 w-3" />Collapse</>
+            ) : (
+              <><ChevronDown className="h-3 w-3" />Show more</>
+            )}
+          </button>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -177,23 +285,9 @@ function ArtifactSection({
         </div>
       ) : (
         <div className="space-y-2">
-          {items.map((item: unknown, i: number) => {
-            const artifact = item as Record<string, string>;
-            return (
-              <Card key={i} variant="default" className="animate-slide-up">
-                <CardContent className="py-3">
-                  <p className="text-sm text-aide-text-primary">
-                    {artifact.title ?? artifact.content ?? JSON.stringify(artifact)}
-                  </p>
-                  {artifact.summary && (
-                    <p className="mt-1 text-xs text-aide-text-secondary">
-                      {artifact.summary}
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })}
+          {items.map((item: unknown, i: number) => (
+            <ArtifactCard key={i} item={item} />
+          ))}
         </div>
       )}
     </div>
@@ -272,7 +366,7 @@ function MessageStream({
                   {msg.role}
                 </span>
                 <span className="text-xs text-aide-text-muted">
-                  {new Date(msg.timestamp).toLocaleTimeString()}
+                  {parseTS(msg.timestamp).toLocaleTimeString()}
                 </span>
               </div>
               <p className="text-xs text-aide-text-secondary">{msg.content}</p>
@@ -287,16 +381,22 @@ function MessageStream({
 export default function ProjectPage() {
   const params = useParams<{ id: string }>();
   const projectId = params.id;
+  const router = useRouter();
 
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
+  const [currentAgent, setCurrentAgent] = useState<{ agent: string; task: string } | null>(null);
+  const [currentIteration, setCurrentIteration] = useState<number>(0);
+  const [topicDriftWarning, setTopicDriftWarning] = useState<string | null>(null);
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null);
   const [checkpointLoading, setCheckpointLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const ws = useTypedWebSocket(projectId);
-  const blackboard = useBlackboard(projectId);
+  const blackboard = useBlackboard(ws, projectId);
 
   useEffect(() => {
     getProject(projectId)
@@ -305,27 +405,54 @@ export default function ProjectPage() {
       .finally(() => setLoading(false));
   }, [projectId]);
 
+  // 每 30s 轮询一次项目状态（刷新 phase / status）
+  useEffect(() => {
+    const timer = setInterval(() => {
+      getProject(projectId)
+        .then((p) => setProject((prev) => prev ? { ...prev, phase: p.phase, status: p.status } : p))
+        .catch(() => {});
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [projectId]);
+
   useEffect(() => {
     if (!ws.subscribe) return;
 
     const unsubs = [
+      ws.subscribe("AgentStarted", (payload) => {
+        setCurrentAgent({ agent: payload.agent, task: payload.task });
+        setCurrentIteration(payload.iteration);
+        // 同步 phase
+        setProject((prev) => prev ? { ...prev, phase: payload.phase } : prev);
+      }),
       ws.subscribe("AgentActivity", (payload) => {
+        setCurrentAgent(null);
+        const meta = payload.metadata as Record<string, unknown> | undefined;
+        if (typeof meta?.iteration === "number") setCurrentIteration(meta.iteration);
         setAgentEvents((prev) => [
           { id: crypto.randomUUID(), ...payload } as AgentEvent,
           ...prev,
         ]);
       }),
+      ws.subscribe("AgentError", () => {
+        setCurrentAgent(null);
+      }),
       ws.subscribe("CheckpointCreated", (payload) => {
+        setCurrentAgent(null);
         setCheckpoint(payload as unknown as Checkpoint);
       }),
       ws.subscribe("CheckpointResolved", () => {
         setCheckpoint(null);
       }),
       ws.subscribe("PhaseAdvanced", (payload) => {
-        const p = payload as { phase: string };
         setProject((prev) =>
-          prev ? { ...prev, current_phase: p.phase } : prev
+          prev ? { ...prev, phase: payload.phase } : prev
         );
+      }),
+      ws.subscribe("TopicDriftWarning", (payload) => {
+        setTopicDriftWarning(payload.message);
+        // 5 秒后自动隐藏
+        setTimeout(() => setTopicDriftWarning(null), 8_000);
       }),
     ];
 
@@ -350,6 +477,16 @@ export default function ProjectPage() {
       setActionLoading(false);
     }
   }, [project, projectId, actionLoading]);
+
+  const handleDelete = useCallback(async () => {
+    setDeleting(true);
+    try {
+      await deleteProject(projectId);
+      router.push("/");
+    } finally {
+      setDeleting(false);
+    }
+  }, [projectId, router]);
 
   const handleCheckpointResponse = useCallback(
     async (value: string) => {
@@ -388,9 +525,24 @@ export default function ProjectPage() {
   }
 
   const isRunning = project.status === "running";
+  const currentPhaseMeta = PHASES.find((p) => p.key === project.phase);
 
   return (
     <div className="animate-fade-in">
+      {/* 偏题警告 Toast */}
+      {topicDriftWarning && (
+        <div className="fixed bottom-6 right-6 z-50 flex max-w-sm items-start gap-3 rounded-lg border border-aide-accent-amber/50 bg-aide-bg-secondary px-4 py-3 shadow-xl animate-slide-up">
+          <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-aide-accent-amber" />
+          <div>
+            <p className="text-xs font-semibold text-aide-accent-amber">研究偏题警告</p>
+            <p className="mt-0.5 text-xs text-aide-text-secondary">{topicDriftWarning}</p>
+          </div>
+          <button onClick={() => setTopicDriftWarning(null)} className="ml-auto text-aide-text-muted hover:text-aide-text-primary">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Top Bar */}
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-4">
@@ -411,8 +563,8 @@ export default function ProjectPage() {
         </div>
         <div className="flex items-center gap-3">
           <Badge variant="phase">
-            {PHASES.find((p) => p.key === project.current_phase)?.label ??
-              project.current_phase}
+            {PHASES.find((p) => p.key === project.phase)?.label ??
+              project.phase}
           </Badge>
           <Badge variant={isRunning ? "success" : "warning"}>
             {project.status}
@@ -436,6 +588,15 @@ export default function ProjectPage() {
             </span>
           </div>
           <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowDeleteConfirm(true)}
+            className="text-aide-text-muted hover:bg-red-500/10 hover:text-red-400"
+            title="删除项目"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button
             variant={isRunning ? "secondary" : "primary"}
             size="sm"
             onClick={handleToggleRunning}
@@ -458,6 +619,39 @@ export default function ProjectPage() {
         </div>
       </div>
 
+      {/* 研究运行中横幅 */}
+      {isRunning && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-aide-accent-blue/30 bg-aide-accent-blue/5 px-4 py-3">
+          <span className="relative flex h-2.5 w-2.5 flex-shrink-0">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-aide-accent-blue opacity-75" />
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-aide-accent-blue" />
+          </span>
+          <div className="flex flex-1 items-center gap-2 min-w-0">
+            <span className="text-sm font-medium text-aide-accent-blue">研究进行中</span>
+            {currentPhaseMeta && (
+              <>
+                <span className="text-aide-text-muted">·</span>
+                <span className="text-sm text-aide-text-secondary">{currentPhaseMeta.label} 阶段</span>
+              </>
+            )}
+            {currentIteration > 0 && (
+              <>
+                <span className="text-aide-text-muted">·</span>
+                <span className="text-sm text-aide-text-muted">第 {currentIteration} 轮</span>
+              </>
+            )}
+            {currentAgent && (
+              <>
+                <span className="text-aide-text-muted">·</span>
+                <Badge variant="agent">{currentAgent.agent}</Badge>
+                <span className="text-xs text-aide-text-muted truncate">{currentAgent.task.slice(0, 60)}{currentAgent.task.length > 60 ? "…" : ""}</span>
+              </>
+            )}
+          </div>
+          <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-aide-accent-blue" />
+        </div>
+      )}
+
       {/* Three Column Layout */}
       <div className="grid grid-cols-[220px_1fr_260px] gap-4">
         {/* Left Column: Phase Progress + Activity */}
@@ -466,8 +660,32 @@ export default function ProjectPage() {
             <h3 className="mb-3 px-1 text-xs font-semibold uppercase tracking-wider text-aide-text-muted">
               Phase Progress
             </h3>
-            <PhaseProgress currentPhase={project.current_phase} />
+            <PhaseProgress currentPhase={project.phase} />
+            {currentIteration > 0 && (
+              <p className="mt-2 px-1 text-xs text-aide-text-muted">
+                迭代次数：{currentIteration}
+              </p>
+            )}
           </div>
+          {/* 当前 Agent 执行状态 */}
+          {currentAgent ? (
+            <div className="rounded-md border border-aide-accent-blue/30 bg-aide-accent-blue/5 px-3 py-2 text-xs">
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin text-aide-accent-blue" />
+                <Badge variant="agent">{currentAgent.agent}</Badge>
+                <span className="text-aide-text-muted text-xs">执行中…</span>
+              </div>
+              <p className="mt-1 text-aide-text-secondary line-clamp-3">{currentAgent.task}</p>
+            </div>
+          ) : isRunning ? (
+            <div className="rounded-md border border-dashed border-aide-border px-3 py-2 text-xs text-aide-text-muted flex items-center gap-2">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-aide-text-muted opacity-60" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-aide-text-muted" />
+              </span>
+              等待下一个 Agent…
+            </div>
+          ) : null}
           <ActivityFeed events={agentEvents} />
         </div>
 
@@ -503,6 +721,41 @@ export default function ProjectPage() {
           <MessageStream messages={blackboard.messages} />
         </div>
       </div>
+
+      {/* Delete Confirm Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-sm rounded-lg border border-aide-border bg-aide-surface p-6 shadow-xl">
+            <div className="mb-4 flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-aide-accent-amber" />
+              <div>
+                <h2 className="text-base font-semibold text-aide-text-primary">删除项目</h2>
+                <p className="mt-1 text-sm text-aide-text-secondary">
+                  确认删除 <span className="font-medium text-aide-text-primary">{project.name}</span>？
+                </p>
+                <p className="mt-1 text-xs text-aide-text-muted">
+                  此操作不可撤销，将同时删除所有研究 artifacts 和文件数据。
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" size="md" onClick={() => setShowDeleteConfirm(false)} disabled={deleting}>
+                取消
+              </Button>
+              <Button
+                variant="primary"
+                size="md"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="bg-red-600 hover:bg-red-700"
+              >
+                {deleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                确认删除
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Checkpoint Modal */}
       <Modal

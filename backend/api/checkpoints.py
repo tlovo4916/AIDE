@@ -77,6 +77,11 @@ async def respond_to_checkpoint(
     await session.commit()
     await session.refresh(cp)
 
-    # TODO: notify orchestrator of user decision
+    from backend.orchestrator.factory import get_checkpoint_manager
+    mgr = get_checkpoint_manager(str(project_id))
+    if mgr:
+        await mgr.apply_user_response(
+            str(checkpoint_id), body.action, body.feedback or None
+        )
 
     return cp

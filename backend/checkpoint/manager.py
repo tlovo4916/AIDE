@@ -11,7 +11,6 @@ from typing import Any, Awaitable, Callable, Optional
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.checkpoint.events import CheckpointCreatedEvent, CheckpointResolvedEvent
 from backend.models.checkpoint import Checkpoint as CheckpointModel
 from backend.types import CheckpointAction, CheckpointEvent, ResearchPhase
 
@@ -69,14 +68,18 @@ class CheckpointManager:
         }
 
         if self._ws_broadcast:
-            ws_event = CheckpointCreatedEvent(
-                project_id=project_id,
-                checkpoint_id=checkpoint_id,
-                phase=phase.value,
-                reason=reason,
-                summary=summary,
-            )
-            await self._ws_broadcast(ws_event.model_dump(mode="json"))
+            await self._ws_broadcast({
+                "event_type": "CheckpointCreated",
+                "id": checkpoint_id,
+                "project_id": project_id,
+                "phase": phase.value,
+                "summary": reason,
+                "options": [
+                    {"label": "Approve", "value": "approve"},
+                    {"label": "Adjust", "value": "adjust"},
+                    {"label": "Skip", "value": "skip"},
+                ],
+            })
 
         return event
 
@@ -106,13 +109,12 @@ class CheckpointManager:
         await self._persist_resolution(checkpoint_id, action, feedback)
 
         if self._ws_broadcast:
-            ws_event = CheckpointResolvedEvent(
-                project_id=meta.get("project_id", ""),
-                checkpoint_id=checkpoint_id,
-                action=action.value,
-                feedback=feedback or "",
-            )
-            await self._ws_broadcast(ws_event.model_dump(mode="json"))
+            await self._ws_broadcast({
+                "event_type": "CheckpointResolved",
+                "id": checkpoint_id,
+                "project_id": meta.get("project_id", ""),
+                "response": action.value,
+            })
 
         return action, feedback
 

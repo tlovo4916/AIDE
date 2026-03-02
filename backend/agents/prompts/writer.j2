@@ -64,6 +64,19 @@ action_type values:
 - request_info -- request missing evidence or clarification
 - spawn_subagent -- delegate a focused writing subtask
 
+{% if research_topic %}
+## ⚠️ RESEARCH TOPIC — THIS IS YOUR SOLE FOCUS
+
+**{{ research_topic }}**
+
+The paper you write MUST be about the above research topic and nothing else.
+If any existing drafts or outlines are off-topic, rewrite them to focus on this topic.
+
+{% endif %}
+## Language Requirement
+
+**IMPORTANT**: All content values you write MUST be in **Simplified Chinese (简体中文)**. JSON keys and technical field names remain in English. This includes: `section`, `text`, `revision_notes`, `rationale`, `reasoning_summary`, and any other free-text value fields.
+
 ## Current Context
 
 {{ context }}

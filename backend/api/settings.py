@@ -1,11 +1,62 @@
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
 from backend.config import settings
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+_OVERRIDES_FIELDS = [
+    "deepseek_api_key",
+    "openrouter_api_key",
+    "openai_api_key",
+    "semantic_scholar_api_key",
+    "default_model",
+    "orchestrator_model",
+    "embedding_model",
+    "summarizer_model",
+    "enable_web_retrieval",
+    "agent_model_overrides",
+]
+
+
+def _overrides_path() -> Path:
+    return settings.workspace_dir / "settings_overrides.json"
+
+
+def load_overrides() -> None:
+    """从持久化文件加载设置覆盖，在启动时调用。"""
+    path = _overrides_path()
+    if not path.exists():
+        return
+    try:
+        data: dict = json.loads(path.read_text())
+        for field in _OVERRIDES_FIELDS:
+            if field in data and data[field] is not None:
+                # 空 dict 不覆盖（保留 config.py 中有意义的默认值）
+                if isinstance(data[field], dict) and not data[field]:
+                    continue
+                setattr(settings, field, data[field])
+        logger.info("Settings overrides loaded from %s", path)
+    except Exception as exc:
+        logger.warning("Failed to load settings overrides: %s", exc)
+
+
+def _save_overrides() -> None:
+    """将当前设置持久化到 workspace volume。"""
+    path = _overrides_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {field: getattr(settings, field) for field in _OVERRIDES_FIELDS}
+        path.write_text(json.dumps(data, default=str))
+    except Exception as exc:
+        logger.error("Failed to save settings overrides: %s", exc)
 
 
 class LLMSettings(BaseModel):
@@ -20,10 +71,10 @@ class LLMSettings(BaseModel):
     semantic_scholar_api_key: str | None = None
     agent_model_overrides: dict[str, str] = {
         "director": "deepseek-reasoner",
-        "scientist": "deepseek-reasoner",
-        "librarian": "deepseek-reasoner",
-        "writer": "deepseek-reasoner",
-        "critic": "deepseek-reasoner",
+        "scientist": "deepseek-chat",
+        "librarian": "deepseek-chat",
+        "writer": "deepseek-chat",
+        "critic": "deepseek-chat",
     }
 
 
@@ -69,4 +120,5 @@ async def update_settings(body: LLMSettings) -> LLMSettings:
     settings.enable_web_retrieval = body.enable_web_retrieval
     settings.agent_model_overrides = body.agent_model_overrides
 
+    _save_overrides()
     return await get_settings()

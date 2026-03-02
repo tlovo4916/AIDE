@@ -4,7 +4,8 @@ import "./globals.css";
 import { Inter } from "next/font/google";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Settings, FlaskConical } from "lucide-react";
+import { LayoutDashboard, Settings, FlaskConical, Sun, Moon } from "lucide-react";
+import { useState, useEffect } from "react";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
@@ -15,6 +16,17 @@ const NAV_ITEMS = [
 
 function Sidebar() {
   const pathname = usePathname();
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+
+  useEffect(() => {
+    const saved = localStorage.getItem("aide-theme") as "dark" | "light" | null;
+    if (saved) setTheme(saved);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("aide-theme", theme);
+  }, [theme]);
 
   return (
     <aside className="fixed left-0 top-0 z-40 flex h-screen w-56 flex-col border-r border-aide-border bg-aide-bg-secondary">
@@ -47,10 +59,17 @@ function Sidebar() {
           );
         })}
       </nav>
-      <div className="border-t border-aide-border px-4 py-3">
+      <div className="border-t border-aide-border px-4 py-3 flex items-center justify-between">
         <p className="text-xs text-aide-text-muted">
-          AI for Discovery & Exploration
+          AI for Discovery &amp; Exploration
         </p>
+        <button
+          onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+          className="rounded-md p-1.5 text-aide-text-muted hover:bg-aide-bg-tertiary hover:text-aide-text-primary transition-colors"
+          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+        </button>
       </div>
     </aside>
   );
@@ -62,8 +81,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${inter.variable} dark`}>
-      <body>
+    <html lang="en" className={inter.variable}>
+      <body className="bg-aide-bg-primary">
         <Sidebar />
         <main className="ml-56 min-h-screen p-6">{children}</main>
       </body>

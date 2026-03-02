@@ -106,7 +106,7 @@ async def _handle_checkpoint_response(
     payload: dict[str, Any],
     request_id: str | None,
 ) -> None:
-    from backend.orchestrator.factory import get_engine
+    from backend.orchestrator.factory import get_checkpoint_manager
     checkpoint_id = payload.get("checkpoint_id", "")
     action_str = payload.get("action", "skip")
     feedback = payload.get("feedback")
@@ -115,11 +115,19 @@ async def _handle_checkpoint_response(
     except ValueError:
         action = CheckpointAction.SKIP
 
-    from backend.checkpoint.manager import CheckpointManager
-    from backend.models import async_session_factory
-    mgr = CheckpointManager(session_factory=async_session_factory)
+    mgr = get_checkpoint_manager(project_id)
+    if mgr is None:
+        await manager.send_response(
+            ws,
+            "error",
+            {"message": "No running research engine for this project"},
+            request_id,
+        )
+        return
     await mgr.apply_user_response(checkpoint_id, action, feedback)
-    await manager.send_response(ws, "checkpoint.responded", {"checkpoint_id": checkpoint_id}, request_id)
+    await manager.send_response(
+        ws, "checkpoint.responded", {"checkpoint_id": checkpoint_id}, request_id
+    )
 
 
 @router.websocket("/ws/projects/{project_id}")

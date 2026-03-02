@@ -16,6 +16,7 @@ async function request<T>(
     const body = await res.text().catch(() => "");
     throw new Error(`API ${res.status}: ${body}`);
   }
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
 
@@ -40,7 +41,7 @@ export function listProjects() {
       id: string;
       name: string;
       research_topic: string;
-      current_phase: string;
+      phase: string;
       status: string;
       created_at: string;
     }[]
@@ -52,7 +53,7 @@ export function getProject(id: string) {
     id: string;
     name: string;
     research_topic: string;
-    current_phase: string;
+    phase: string;
     status: string;
     created_at: string;
   }>(`/api/projects/${id}`);
@@ -122,13 +123,13 @@ export function listCheckpoints(projectId: string) {
 export function respondToCheckpoint(
   projectId: string,
   checkpointId: string,
-  response: string
+  action: string
 ) {
   return request<void>(
     `/api/projects/${projectId}/checkpoints/${checkpointId}/respond`,
     {
       method: "POST",
-      body: JSON.stringify({ response }),
+      body: JSON.stringify({ action }),
     }
   );
 }
@@ -144,6 +145,16 @@ export function updateSettings(settings: Record<string, unknown>) {
     method: "PUT",
     body: JSON.stringify(settings),
   });
+}
+
+// --- Blackboard ---
+
+export function getBlackboard(projectId: string) {
+  return request<{
+    artifacts: Record<string, { id: string; type: string; data: Record<string, unknown> }[]>;
+    challenges: { id: string; from: string; message: string; resolved: boolean }[];
+    messages: { id: string; role: string; content: string; timestamp: string }[];
+  }>(`/api/projects/${projectId}/blackboard`);
 }
 
 // --- Token Usage ---
