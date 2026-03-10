@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from backend.types import ArtifactMeta, ArtifactType, ContextLevel
 
@@ -13,28 +13,60 @@ if TYPE_CHECKING:
 
 _TYPE_KEYWORDS: dict[ArtifactType, set[str]] = {
     ArtifactType.DIRECTIONS: {
-        "direction", "research", "scope", "goal", "topic", "field",
+        "direction",
+        "research",
+        "scope",
+        "goal",
+        "topic",
+        "field",
     },
     ArtifactType.HYPOTHESES: {
-        "hypothesis", "hypotheses", "claim", "theory", "prediction",
+        "hypothesis",
+        "hypotheses",
+        "claim",
+        "theory",
+        "prediction",
     },
     ArtifactType.EVIDENCE_FINDINGS: {
-        "evidence", "finding", "result", "data", "study", "paper",
+        "evidence",
+        "finding",
+        "result",
+        "data",
+        "study",
+        "paper",
     },
     ArtifactType.EVIDENCE_GAPS: {
-        "gap", "missing", "unknown", "need", "lack",
+        "gap",
+        "missing",
+        "unknown",
+        "need",
+        "lack",
     },
     ArtifactType.EXPERIMENT_GUIDE: {
-        "experiment", "methodology", "protocol", "design",
+        "experiment",
+        "methodology",
+        "protocol",
+        "design",
     },
     ArtifactType.OUTLINE: {
-        "outline", "structure", "section", "organization",
+        "outline",
+        "structure",
+        "section",
+        "organization",
     },
     ArtifactType.DRAFT: {
-        "draft", "writing", "manuscript", "paper", "document",
+        "draft",
+        "writing",
+        "manuscript",
+        "paper",
+        "document",
     },
     ArtifactType.REVIEW: {
-        "review", "critique", "feedback", "assessment", "evaluation",
+        "review",
+        "critique",
+        "feedback",
+        "assessment",
+        "evaluation",
     },
 }
 
@@ -51,7 +83,6 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 class DirectoryRecursiveRetriever:
-
     def __init__(self, embedding_service: EmbeddingService) -> None:
         self._embeddings = embedding_service
 
@@ -102,9 +133,7 @@ class DirectoryRecursiveRetriever:
         board: Blackboard,
         target_types: list[ArtifactType],
     ) -> dict[ArtifactType, list[tuple[ArtifactMeta, int, list[float]]]]:
-        dir_data: dict[
-            ArtifactType, list[tuple[ArtifactMeta, int, list[float]]]
-        ] = {}
+        dir_data: dict[ArtifactType, list[tuple[ArtifactMeta, int, list[float]]]] = {}
 
         for at in target_types:
             metas = await board.list_artifacts(at)
@@ -123,10 +152,7 @@ class DirectoryRecursiveRetriever:
             if not l0_texts:
                 continue
             l0_embs = await self._embeddings.embed_batch(l0_texts)
-            dir_data[at] = [
-                (m, ver, emb)
-                for (m, ver), emb in zip(meta_versions, l0_embs)
-            ]
+            dir_data[at] = [(m, ver, emb) for (m, ver), emb in zip(meta_versions, l0_embs)]
 
         return dir_data
 
@@ -160,18 +186,14 @@ class DirectoryRecursiveRetriever:
         prev_top_k: set[tuple[str, str]] = set()
         stable_rounds = 0
 
-        for at, _dir_score in sorted(
-            dir_scores.items(), key=lambda x: x[1], reverse=True
-        ):
+        for at, _dir_score in sorted(dir_scores.items(), key=lambda x: x[1], reverse=True):
             for meta, ver, emb in dir_data[at]:
                 own_score = _cosine_similarity(query_emb, emb)
                 propagated = 0.5 * own_score + 0.5 * _dir_score
                 candidates.append((propagated, at, meta.artifact_id, ver))
 
             candidates.sort(key=lambda x: x[0], reverse=True)
-            current_top = {
-                (c[1].value, c[2]) for c in candidates[:top_k]
-            }
+            current_top = {(c[1].value, c[2]) for c in candidates[:top_k]}
             if current_top == prev_top_k:
                 stable_rounds += 1
                 if stable_rounds >= 2:
@@ -196,12 +218,14 @@ class DirectoryRecursiveRetriever:
         for score, at, aid, ver in candidates:
             content = await board.read_artifact(at, aid, ver, level)
             meta = await board.read_artifact_meta(at, aid)
-            results.append({
-                "artifact_type": at.value,
-                "artifact_id": aid,
-                "version": ver,
-                "score": score,
-                "content": content,
-                "meta": meta.model_dump(mode="json") if meta else {},
-            })
+            results.append(
+                {
+                    "artifact_type": at.value,
+                    "artifact_id": aid,
+                    "version": ver,
+                    "score": score,
+                    "content": content,
+                    "meta": meta.model_dump(mode="json") if meta else {},
+                }
+            )
         return results

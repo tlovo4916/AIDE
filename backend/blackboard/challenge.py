@@ -13,7 +13,6 @@ if TYPE_CHECKING:
 
 
 class ChallengeManager:
-
     async def raise_challenge(
         self,
         board: Blackboard,

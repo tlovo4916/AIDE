@@ -3,33 +3,35 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
-from typing import Any, Literal, Optional
+from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
-
 
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
 
-class AgentRole(str, Enum):
+
+class AgentRole(StrEnum):
     DIRECTOR = "director"
     SCIENTIST = "scientist"
     LIBRARIAN = "librarian"
     WRITER = "writer"
     CRITIC = "critic"
+    SYNTHESIZER = "synthesizer"
 
 
-class ResearchPhase(str, Enum):
+class ResearchPhase(StrEnum):
     EXPLORE = "explore"
     HYPOTHESIZE = "hypothesize"
     EVIDENCE = "evidence"
     COMPOSE = "compose"
+    SYNTHESIZE = "synthesize"
     COMPLETE = "complete"
 
 
-class ArtifactType(str, Enum):
+class ArtifactType(StrEnum):
     DIRECTIONS = "directions"
     HYPOTHESES = "hypotheses"
     EVIDENCE_FINDINGS = "evidence_findings"
@@ -41,13 +43,13 @@ class ArtifactType(str, Enum):
     TREND_SIGNALS = "trend_signals"
 
 
-class ContextLevel(str, Enum):
+class ContextLevel(StrEnum):
     L0 = "l0"
     L1 = "l1"
     L2 = "l2"
 
 
-class ActionType(str, Enum):
+class ActionType(StrEnum):
     WRITE_ARTIFACT = "write_artifact"
     POST_MESSAGE = "post_message"
     RAISE_CHALLENGE = "raise_challenge"
@@ -56,32 +58,32 @@ class ActionType(str, Enum):
     SPAWN_SUBAGENT = "spawn_subagent"
 
 
-class ChallengeStatus(str, Enum):
+class ChallengeStatus(StrEnum):
     OPEN = "open"
     RESOLVED = "resolved"
     DISMISSED = "dismissed"
 
 
-class CheckpointAction(str, Enum):
+class CheckpointAction(StrEnum):
     APPROVE = "approve"
     ADJUST = "adjust"
     SKIP = "skip"
 
 
-class TaskPriority(str, Enum):
+class TaskPriority(StrEnum):
     CRITICAL = "critical"
     NORMAL = "normal"
     EXPLORATORY = "exploratory"
 
 
-class DedupDecision(str, Enum):
+class DedupDecision(StrEnum):
     SKIP = "skip"
     CREATE = "create"
     MERGE = "merge"
     SUPERSEDE = "supersede"
 
 
-class WSFrameType(str, Enum):
+class WSFrameType(StrEnum):
     REQUEST = "request"
     RESPONSE = "response"
     PUSH = "push"
@@ -90,6 +92,7 @@ class WSFrameType(str, Enum):
 # ---------------------------------------------------------------------------
 # Blackboard data models
 # ---------------------------------------------------------------------------
+
 
 class ArtifactMeta(BaseModel):
     artifact_type: ArtifactType
@@ -119,16 +122,16 @@ class ChallengeRecord(BaseModel):
     target_artifact: str
     argument: str
     evidence_refs: list[str] = Field(default_factory=list)
-    response: Optional[str] = None
-    responder: Optional[AgentRole] = None
+    response: str | None = None
+    responder: AgentRole | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    resolved_at: Optional[datetime] = None
+    resolved_at: datetime | None = None
 
 
 class Message(BaseModel):
     message_id: str
     from_agent: AgentRole
-    to_agent: Optional[AgentRole] = None  # None = broadcast
+    to_agent: AgentRole | None = None  # None = broadcast
     content: str
     refs: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -149,14 +152,15 @@ class DecisionRecord(BaseModel):
 # Orchestrator models
 # ---------------------------------------------------------------------------
 
+
 class OrchestratorDecision(BaseModel):
     agent_to_invoke: AgentRole
     task_description: str
     task_priority: TaskPriority = TaskPriority.NORMAL
     allow_subagents: bool = False
     trigger_checkpoint: bool = False
-    checkpoint_reason: Optional[str] = None
-    backtrack_to: Optional[ResearchPhase] = None
+    checkpoint_reason: str | None = None
+    backtrack_to: ResearchPhase | None = None
     rationale: str = ""
 
 
@@ -171,6 +175,7 @@ class ConvergenceSignals(BaseModel):
 # ---------------------------------------------------------------------------
 # Agent models
 # ---------------------------------------------------------------------------
+
 
 class AgentTask(BaseModel):
     task_id: str
@@ -190,7 +195,7 @@ class AgentResponse(BaseModel):
 class SubAgentRequest(BaseModel):
     task: str
     tools: list[str] = Field(default_factory=list)
-    model_override: Optional[str] = None
+    model_override: str | None = None
 
 
 class SubAgentResult(BaseModel):
@@ -199,12 +204,13 @@ class SubAgentResult(BaseModel):
     task: str
     output: dict[str, Any] = Field(default_factory=dict)
     success: bool = True
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # ---------------------------------------------------------------------------
 # Checkpoint models
 # ---------------------------------------------------------------------------
+
 
 class CheckpointEvent(BaseModel):
     checkpoint_id: str
@@ -213,9 +219,9 @@ class CheckpointEvent(BaseModel):
     reason: str
     summary: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    user_action: Optional[CheckpointAction] = None
-    user_feedback: Optional[str] = None
-    resolved_at: Optional[datetime] = None
+    user_action: CheckpointAction | None = None
+    user_feedback: str | None = None
+    resolved_at: datetime | None = None
     timeout_minutes: int = 30
 
 
@@ -223,16 +229,18 @@ class CheckpointEvent(BaseModel):
 # WebSocket protocol
 # ---------------------------------------------------------------------------
 
+
 class WSFrame(BaseModel):
     type: WSFrameType
     event: str
     payload: dict[str, Any] = Field(default_factory=dict)
-    request_id: Optional[str] = None
+    request_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
 # Search models
 # ---------------------------------------------------------------------------
+
 
 class SearchResult(BaseModel):
     chunk_id: str
@@ -240,4 +248,4 @@ class SearchResult(BaseModel):
     source: str
     score: float
     metadata: dict[str, Any] = Field(default_factory=dict)
-    publish_date: Optional[datetime] = None
+    publish_date: datetime | None = None

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Awaitable
+from typing import Any
 
 import tiktoken
 
@@ -15,8 +16,14 @@ from backend.config import settings
 
 class ProcessedChunk:
     __slots__ = (
-        "chunk_id", "source", "content", "l0_summary", "l1_summary",
-        "metadata", "token_count", "index",
+        "chunk_id",
+        "source",
+        "content",
+        "l0_summary",
+        "l1_summary",
+        "metadata",
+        "token_count",
+        "index",
     )
 
     def __init__(
@@ -56,7 +63,6 @@ SummarizerFn = Callable[[str, str], Awaitable[str]]
 
 
 class PDFProcessor:
-
     def __init__(
         self,
         summarizer: SummarizerFn | None = None,
@@ -76,6 +82,7 @@ class PDFProcessor:
     @staticmethod
     def _extract_with_pymupdf(path: Path) -> str:
         import fitz  # type: ignore[import-untyped]
+
         doc = fitz.open(str(path))
         pages = [page.get_text() for page in doc]
         doc.close()
@@ -84,10 +91,9 @@ class PDFProcessor:
     @staticmethod
     def _extract_with_pdfplumber(path: Path) -> str:
         import pdfplumber  # type: ignore[import-untyped]
+
         with pdfplumber.open(str(path)) as pdf:
-            return "\n\n".join(
-                page.extract_text() or "" for page in pdf.pages
-            )
+            return "\n\n".join(page.extract_text() or "" for page in pdf.pages)
 
     def extract_text(self, path: Path) -> str:
         try:
@@ -103,7 +109,7 @@ class PDFProcessor:
     @staticmethod
     def extract_metadata(text: str, path: Path) -> dict[str, Any]:
         first_page = text[:3000]
-        lines = [l.strip() for l in first_page.split("\n") if l.strip()]
+        lines = [line.strip() for line in first_page.split("\n") if line.strip()]
 
         title = lines[0] if lines else path.stem
         authors = ""
@@ -118,7 +124,7 @@ class PDFProcessor:
             low = line.lower()
             if low.startswith("abstract"):
                 abstract_lines = []
-                for al in lines[i:i + 10]:
+                for al in lines[i : i + 10]:
                     if al.lower().startswith("abstract"):
                         al = re.sub(r"(?i)^abstract[:\s]*", "", al)
                     if al.lower().startswith(("introduction", "1.", "keywords")):
@@ -166,7 +172,7 @@ class PDFProcessor:
                     wt = self._count_tokens(w + " ")
                     if buf_tokens + wt > self._chunk_size and buf:
                         chunks.append(" ".join(buf))
-                        overlap_words = buf[-(self._chunk_overlap // max(wt, 1)):]
+                        overlap_words = buf[-(self._chunk_overlap // max(wt, 1)) :]
                         buf = list(overlap_words)
                         buf_tokens = self._count_tokens(" ".join(buf))
                     buf.append(w)

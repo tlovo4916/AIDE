@@ -19,7 +19,6 @@ MODEL_MAP: dict[str, str] = {
 
 
 class OpenRouterProvider:
-
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key or settings.openrouter_api_key or ""
         self._client = httpx.AsyncClient(

@@ -99,6 +99,20 @@ export interface ResearchCompletedPayload {
   paper_path: string | null;
 }
 
+export interface LanesStartedPayload {
+  num_lanes: number;
+  project_id: string;
+}
+
+export interface LaneCompletedPayload {
+  lane: number;
+  error?: boolean;
+}
+
+export interface SynthesisStartedPayload {
+  num_lanes: number;
+}
+
 // Union of all push event names
 export type WSPushEvent =
   | "CheckpointCreated"
@@ -114,7 +128,10 @@ export type WSPushEvent =
   | "ChallengeResolved"
   | "ArtifactUpdated"
   | "TopicDriftWarning"
-  | "ResearchCompleted";
+  | "ResearchCompleted"
+  | "LanesStarted"
+  | "LaneCompleted"
+  | "SynthesisStarted";
 
 export type WSPushPayloadMap = {
   CheckpointCreated: CheckpointCreatedPayload;
@@ -131,4 +148,7 @@ export type WSPushPayloadMap = {
   ArtifactUpdated: ArtifactUpdatedPayload;
   TopicDriftWarning: TopicDriftWarningPayload;
   ResearchCompleted: ResearchCompletedPayload;
+  LanesStarted: LanesStartedPayload;
+  LaneCompleted: LaneCompletedPayload;
+  SynthesisStarted: SynthesisStartedPayload;
 };

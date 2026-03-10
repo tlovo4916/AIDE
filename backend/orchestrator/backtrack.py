@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Optional, Protocol
+from typing import Protocol
 
 from backend.types import ConvergenceSignals, ResearchPhase
 
@@ -20,9 +20,7 @@ _PHASE_ORDER = [
 
 
 class Board(Protocol):
-    async def get_artifacts_since_phase(
-        self, phase: ResearchPhase
-    ) -> list[str]: ...
+    async def get_artifacts_since_phase(self, phase: ResearchPhase) -> list[str]: ...
     async def mark_superseded(self, artifact_id: str) -> None: ...
     async def update_meta(self, key: str, value: object) -> None: ...
     async def has_contradictory_evidence(self) -> bool: ...
@@ -47,7 +45,7 @@ class BacktrackController:
         board: Board,
         current_phase: ResearchPhase,
         signals: ConvergenceSignals,
-    ) -> Optional[ResearchPhase]:
+    ) -> ResearchPhase | None:
         if current_phase == ResearchPhase.EXPLORE:
             return None
 
@@ -69,9 +67,7 @@ class BacktrackController:
 
         return None
 
-    async def execute_backtrack(
-        self, board: Board, target_phase: ResearchPhase
-    ) -> None:
+    async def execute_backtrack(self, board: Board, target_phase: ResearchPhase) -> None:
         target_idx = _PHASE_ORDER.index(target_phase)
         phases_to_supersede = _PHASE_ORDER[target_idx + 1 :]
 
@@ -87,9 +83,7 @@ class BacktrackController:
                 )
 
         source_phase = (
-            _PHASE_ORDER[target_idx + 1]
-            if target_idx + 1 < len(_PHASE_ORDER)
-            else target_phase
+            _PHASE_ORDER[target_idx + 1] if target_idx + 1 < len(_PHASE_ORDER) else target_phase
         )
         await board.update_meta(
             "last_backtrack",

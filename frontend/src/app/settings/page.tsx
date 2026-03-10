@@ -11,6 +11,8 @@ interface SettingsData {
   deepseek_api_key: string | null;
   openrouter_api_key: string | null;
   openai_api_key: string | null;
+  anthropic_api_key: string | null;
+  anthropic_base_url: string;
   default_model: string;
   orchestrator_model: string;
   embedding_model: string;
@@ -23,6 +25,8 @@ interface SettingsData {
 const MODEL_OPTIONS = [
   { value: "deepseek-reasoner", label: "DeepSeek Reasoner" },
   { value: "deepseek-chat", label: "DeepSeek Chat" },
+  { value: "claude-opus-4-6", label: "Claude Opus 4.6" },
+  { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
   { value: "gpt", label: "GPT (via OpenRouter)" },
   { value: "opus", label: "Claude Opus (via OpenRouter)" },
   { value: "gemini-pro", label: "Gemini Pro (via OpenRouter)" },
@@ -34,12 +38,15 @@ const AGENT_ROLES = [
   { key: "librarian", label: "Librarian" },
   { key: "writer", label: "Writer" },
   { key: "critic", label: "Critic" },
+  { key: "synthesizer", label: "Synthesizer" },
 ];
 
 const DEFAULT_SETTINGS: SettingsData = {
   deepseek_api_key: null,
   openrouter_api_key: null,
   openai_api_key: null,
+  anthropic_api_key: null,
+  anthropic_base_url: "https://api.anthropic.com",
   default_model: "deepseek-reasoner",
   orchestrator_model: "deepseek-chat",
   embedding_model: "text-embedding-3-small",
@@ -49,9 +56,10 @@ const DEFAULT_SETTINGS: SettingsData = {
   agent_model_overrides: {
     director: "deepseek-reasoner",
     scientist: "deepseek-reasoner",
-    librarian: "deepseek-reasoner",
-    writer: "deepseek-reasoner",
     critic: "deepseek-reasoner",
+    librarian: "deepseek-chat",
+    writer: "deepseek-chat",
+    synthesizer: "deepseek-reasoner",
   },
 };
 
@@ -143,6 +151,20 @@ export default function SettingsPage() {
               onChange={(e) => updateField("openai_api_key", e.target.value || null)}
               placeholder="sk-..."
               togglePassword
+            />
+            <Input
+              label="Anthropic API Key"
+              type="password"
+              value={settings.anthropic_api_key ?? ""}
+              onChange={(e) => updateField("anthropic_api_key", e.target.value || null)}
+              placeholder="sk-ant-..."
+              togglePassword
+            />
+            <Input
+              label="Anthropic Base URL"
+              value={settings.anthropic_base_url}
+              onChange={(e) => updateField("anthropic_base_url", e.target.value)}
+              placeholder="https://api.anthropic.com"
             />
           </CardContent>
         </Card>

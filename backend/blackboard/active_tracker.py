@@ -11,7 +11,6 @@ if TYPE_CHECKING:
 
 
 class ActiveTracker:
-
     async def increment(
         self,
         board: Blackboard,
@@ -35,7 +34,9 @@ class ActiveTracker:
     ) -> list[ArtifactMeta]:
         all_metas = await board.list_artifacts(artifact_type)
         sorted_metas = sorted(
-            all_metas, key=lambda m: m.active_count, reverse=True,
+            all_metas,
+            key=lambda m: m.active_count,
+            reverse=True,
         )
         return sorted_metas[:top_k]
 

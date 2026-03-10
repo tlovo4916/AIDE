@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -26,9 +25,11 @@ class Settings(BaseSettings):
     workspace_dir: Path = Path("workspace")
 
     # -- LLM API keys --
-    deepseek_api_key: Optional[str] = None
-    openrouter_api_key: Optional[str] = None
-    openai_api_key: Optional[str] = None
+    deepseek_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    anthropic_base_url: str = "https://api.anthropic.com"
 
     # -- LLM defaults --
     default_model: str = "deepseek-reasoner"
@@ -37,14 +38,7 @@ class Settings(BaseSettings):
     summarizer_model: str = "deepseek-chat"
 
     # -- Per-agent model overrides (role -> model string) --
-    agent_model_overrides: dict[str, str] = Field(
-        default_factory=lambda: {
-            "scientist": "deepseek-chat",
-            "librarian": "deepseek-chat",
-            "writer": "deepseek-chat",
-            "critic": "deepseek-chat",
-        }
-    )
+    agent_model_overrides: dict[str, str] = Field(default_factory=dict)
 
     # -- ChromaDB --
     chroma_persist_dir: Path = Path("workspace/.chroma")
@@ -83,7 +77,7 @@ class Settings(BaseSettings):
     max_subagents_per_agent: int = 3
 
     # -- Web retrieval --
-    semantic_scholar_api_key: Optional[str] = None
+    semantic_scholar_api_key: str | None = None
     enable_web_retrieval: bool = True
 
     # -- Trend extraction --

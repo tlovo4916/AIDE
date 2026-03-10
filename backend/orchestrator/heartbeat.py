@@ -7,7 +7,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 
 from backend.config import settings
 
@@ -40,9 +40,7 @@ class HeartbeatMonitor:
 
     async def start(self, project_id: str, board: Board) -> None:
         if project_id in self._tasks:
-            logger.warning(
-                "Heartbeat already running for project %s", project_id
-            )
+            logger.warning("Heartbeat already running for project %s", project_id)
             return
         self._last_activity[project_id] = datetime.utcnow()
         self._consecutive_failures[project_id] = 0
@@ -70,9 +68,7 @@ class HeartbeatMonitor:
         return {
             "agent_statuses": dict(self._agent_statuses),
             "ws_connected": self._ws_connected,
-            "last_activity": {
-                k: v.isoformat() for k, v in self._last_activity.items()
-            },
+            "last_activity": {k: v.isoformat() for k, v in self._last_activity.items()},
             "consecutive_failures": dict(self._consecutive_failures),
             "active_projects": list(self._tasks.keys()),
         }
@@ -85,9 +81,7 @@ class HeartbeatMonitor:
         self._agent_statuses[role] = status
 
     def record_failure(self, project_id: str) -> None:
-        self._consecutive_failures[project_id] = (
-            self._consecutive_failures.get(project_id, 0) + 1
-        )
+        self._consecutive_failures[project_id] = self._consecutive_failures.get(project_id, 0) + 1
 
     def set_ws_connected(self, connected: bool) -> None:
         self._ws_connected = connected
@@ -118,7 +112,7 @@ class HeartbeatMonitor:
     @staticmethod
     def recover_from_snapshot(
         project_path: Path,
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         snapshot_path = project_path / "snapshot.json"
         if not snapshot_path.exists():
             logger.warning("No snapshot found at %s", snapshot_path)
@@ -147,9 +141,7 @@ class HeartbeatMonitor:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception(
-                    "Heartbeat loop error for %s", project_id
-                )
+                logger.exception("Heartbeat loop error for %s", project_id)
 
     def _detect_issues(self, project_id: str) -> None:
         last = self._last_activity.get(project_id)

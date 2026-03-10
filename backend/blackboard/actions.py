@@ -38,11 +38,11 @@ WRITE_PERMISSIONS: dict[AgentRole, set[ArtifactType]] = {
     AgentRole.LIBRARIAN: {ArtifactType.EVIDENCE_FINDINGS, ArtifactType.EVIDENCE_GAPS},
     AgentRole.WRITER: {ArtifactType.OUTLINE, ArtifactType.DRAFT},
     AgentRole.CRITIC: {ArtifactType.REVIEW},
+    AgentRole.SYNTHESIZER: {ArtifactType.DRAFT, ArtifactType.OUTLINE},
 }
 
 
 class ActionExecutor:
-
     async def execute(self, action: BlackboardAction, board: Blackboard) -> None:
         self._validate_permissions(action)
 
@@ -76,16 +76,12 @@ class ActionExecutor:
         if action.action_type != ActionType.WRITE_ARTIFACT:
             return
         try:
-            target_type = ArtifactType(
-                action.content.get("artifact_type", action.target)
-            )
+            target_type = ArtifactType(action.content.get("artifact_type", action.target))
         except ValueError:
             return
         allowed = WRITE_PERMISSIONS.get(action.agent_role, set())
         if target_type not in allowed:
-            raise PermissionError(
-                f"{action.agent_role.value} cannot write {target_type.value}"
-            )
+            raise PermissionError(f"{action.agent_role.value} cannot write {target_type.value}")
 
     @staticmethod
     def _is_content_empty(content: dict) -> bool:
@@ -103,32 +99,33 @@ class ActionExecutor:
         return True
 
     @staticmethod
-    async def _exec_write_artifact(
-        action: BlackboardAction, board: Blackboard
-    ) -> None:
+    async def _exec_write_artifact(action: BlackboardAction, board: Blackboard) -> None:
         c = action.content
         if ActionExecutor._is_content_empty(c):
             logger.warning(
                 "Rejecting empty artifact from %s: %s",
-                action.agent_role.value, {k: type(v).__name__ for k, v in c.items()},
+                action.agent_role.value,
+                {k: type(v).__name__ for k, v in c.items()},
             )
             return
-        _ROLE_DEFAULT: dict[AgentRole, ArtifactType] = {
+        role_default: dict[AgentRole, ArtifactType] = {
             AgentRole.DIRECTOR: ArtifactType.DIRECTIONS,
             AgentRole.SCIENTIST: ArtifactType.HYPOTHESES,
             AgentRole.LIBRARIAN: ArtifactType.EVIDENCE_FINDINGS,
             AgentRole.WRITER: ArtifactType.OUTLINE,
             AgentRole.CRITIC: ArtifactType.REVIEW,
+            AgentRole.SYNTHESIZER: ArtifactType.DRAFT,
         }
         raw_type = c.get("artifact_type", action.target)
         try:
             artifact_type = ArtifactType(raw_type)
         except ValueError:
-            artifact_type = _ROLE_DEFAULT.get(action.agent_role, ArtifactType.EVIDENCE_FINDINGS)
+            artifact_type = role_default.get(action.agent_role, ArtifactType.EVIDENCE_FINDINGS)
             logger.warning(
-                "_exec_write_artifact: invalid artifact_type %r from %s, "
-                "falling back to %s",
-                raw_type, action.agent_role.value, artifact_type.value,
+                "_exec_write_artifact: invalid artifact_type %r from %s, falling back to %s",
+                raw_type,
+                action.agent_role.value,
+                artifact_type.value,
             )
         artifact_id = c.get("artifact_id", str(uuid.uuid4()))
         version = c.get(
@@ -151,9 +148,7 @@ class ActionExecutor:
         )
 
     @staticmethod
-    async def _exec_post_message(
-        action: BlackboardAction, board: Blackboard
-    ) -> None:
+    async def _exec_post_message(action: BlackboardAction, board: Blackboard) -> None:
         c = action.content
         to_agent = AgentRole(c["to_agent"]) if c.get("to_agent") else None
         msg = Message(
@@ -166,15 +161,11 @@ class ActionExecutor:
         await board.post_message(msg)
 
     @staticmethod
-    async def _exec_raise_challenge(
-        action: BlackboardAction, board: Blackboard
-    ) -> None:
+    async def _exec_raise_challenge(action: BlackboardAction, board: Blackboard) -> None:
         c = action.content
         argument = c.get("argument", "").strip()
         if not argument:
-            logger.warning(
-                "Rejecting empty challenge from %s", action.agent_role.value
-            )
+            logger.warning("Rejecting empty challenge from %s", action.agent_role.value)
             return
         rec = ChallengeRecord(
             challenge_id=c.get("challenge_id", str(uuid.uuid4())),
@@ -186,9 +177,7 @@ class ActionExecutor:
         await board.write_challenge(rec)
 
     @staticmethod
-    async def _exec_resolve_challenge(
-        action: BlackboardAction, board: Blackboard
-    ) -> None:
+    async def _exec_resolve_challenge(action: BlackboardAction, board: Blackboard) -> None:
         c = action.content
         challenge_id = c.get("challenge_id", action.target)
         existing = await board.read_challenge(challenge_id)
@@ -202,9 +191,7 @@ class ActionExecutor:
         await board.write_challenge(existing)
 
     @staticmethod
-    async def _exec_request_info(
-        action: BlackboardAction, board: Blackboard
-    ) -> None:
+    async def _exec_request_info(action: BlackboardAction, board: Blackboard) -> None:
         msg = Message(
             message_id=str(uuid.uuid4()),
             from_agent=action.agent_role,
@@ -214,9 +201,7 @@ class ActionExecutor:
         await board.post_message(msg)
 
     @staticmethod
-    async def _exec_spawn_subagent(
-        action: BlackboardAction, board: Blackboard
-    ) -> None:
+    async def _exec_spawn_subagent(action: BlackboardAction, board: Blackboard) -> None:
         """Record spawn_subagent requests as messages.
 
         Actual subagent spawning is handled by the engine's SubAgentPool;
@@ -235,9 +220,7 @@ class ActionExecutor:
         await board.post_message(msg)
 
     @staticmethod
-    async def _log_as_decision(
-        action: BlackboardAction, board: Blackboard
-    ) -> None:
+    async def _log_as_decision(action: BlackboardAction, board: Blackboard) -> None:
         meta = await board.get_project_meta()
         phase_str = meta.get("phase", "explore")
         try:
@@ -251,9 +234,8 @@ class ActionExecutor:
             context_summary=f"Auto-logged from {action.action_type.value}",
             options=[action.action_type.value],
             chosen=action.action_type.value,
-            rationale=action.rationale or (
-                f"{action.agent_role.value} performed {action.action_type.value}"
-            ),
+            rationale=action.rationale
+            or (f"{action.agent_role.value} performed {action.action_type.value}"),
             decided_by=action.agent_role,
         )
         await board.write_decision(decision)

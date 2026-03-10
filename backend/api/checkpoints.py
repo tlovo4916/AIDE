@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models import get_session, Checkpoint
+from backend.models import Checkpoint, get_session
 from backend.types import CheckpointAction
 
 router = APIRouter(prefix="/projects/{project_id}/checkpoints", tags=["checkpoints"])
@@ -73,15 +73,14 @@ async def respond_to_checkpoint(
 
     cp.user_action = body.action.value
     cp.user_feedback = body.feedback or None
-    cp.resolved_at = datetime.now(timezone.utc)
+    cp.resolved_at = datetime.now(UTC)
     await session.commit()
     await session.refresh(cp)
 
     from backend.orchestrator.factory import get_checkpoint_manager
+
     mgr = get_checkpoint_manager(str(project_id))
     if mgr:
-        await mgr.apply_user_response(
-            str(checkpoint_id), body.action, body.feedback or None
-        )
+        await mgr.apply_user_response(str(checkpoint_id), body.action, body.feedback or None)
 
     return cp

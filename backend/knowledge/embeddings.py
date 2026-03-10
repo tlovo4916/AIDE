@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import tiktoken
 import httpx
+import tiktoken
 
 from backend.config import settings
 
 
 class EmbeddingService:
-
     MODEL = "text-embedding-3-small"
     MAX_TOKENS = 8191
     BATCH_LIMIT = 2048

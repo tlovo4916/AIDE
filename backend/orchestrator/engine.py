@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable, Coroutine
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Protocol
+from typing import Any, Protocol
 
 from backend.agents.base import BaseAgent
 from backend.agents.subagent import SubAgentPool
@@ -41,23 +42,15 @@ class Board(Protocol):
 
     async def get_state_summary(self, level: ContextLevel) -> str: ...
     async def apply_action(self, action: BlackboardAction) -> None: ...
-    async def dedup_check(
-        self, actions: list[BlackboardAction]
-    ) -> list[BlackboardAction]: ...
+    async def dedup_check(self, actions: list[BlackboardAction]) -> list[BlackboardAction]: ...
     async def get_open_challenges(self) -> list[ChallengeRecord]: ...
     async def get_open_challenge_count(self) -> int: ...
     async def get_phase_critic_score(self, phase: ResearchPhase) -> float: ...
     async def set_phase_critic_score(self, phase: ResearchPhase, score: float) -> None: ...
     async def get_recent_revision_count(self, rounds: int) -> int: ...
-    async def get_phase_iteration_count(
-        self, phase: ResearchPhase
-    ) -> int: ...
-    async def increment_phase_iteration(
-        self, phase: ResearchPhase
-    ) -> int: ...
-    async def get_artifacts_since_phase(
-        self, phase: ResearchPhase
-    ) -> list[str]: ...
+    async def get_phase_iteration_count(self, phase: ResearchPhase) -> int: ...
+    async def increment_phase_iteration(self, phase: ResearchPhase) -> int: ...
+    async def get_artifacts_since_phase(self, phase: ResearchPhase) -> list[str]: ...
     async def mark_superseded(self, artifact_id: str) -> None: ...
     async def update_meta(self, key: str, value: object) -> None: ...
     async def get_project_meta(self) -> dict[str, Any]: ...
@@ -139,6 +132,7 @@ class OrchestrationEngine:
         self._phase = ResearchPhase.EXPLORE
         self._iteration = 0
         self._research_topic = ""
+        self._skip_synthesize = True  # single-lane: COMPOSE→COMPLETE directly
 
     def set_subagent_pool(self, pool: SubAgentPool) -> None:
         self._subagent_pool = pool
@@ -163,7 +157,9 @@ class OrchestrationEngine:
 
         logger.info(
             "[Engine] Starting run loop for project %s (restored phase=%s, iter_done=%d, topic=%r)",
-            self._project_id, self._phase.value, self._iteration,
+            self._project_id,
+            self._phase.value,
+            self._iteration,
             self._research_topic[:60] if self._research_topic else "",
         )
         await self._heartbeat.start(self._project_id, self._board)
@@ -176,7 +172,9 @@ class OrchestrationEngine:
                 await self._board.update_meta("phase", self._phase.value)
                 logger.info(
                     "[Engine] === Iteration %d | phase=%s | project=%s ===",
-                    self._iteration, self._phase.value, self._project_id,
+                    self._iteration,
+                    self._phase.value,
+                    self._project_id,
                 )
 
                 # 1. Assess blackboard state
@@ -219,9 +217,7 @@ class OrchestrationEngine:
                 # 4. Backtrack if requested
                 if decision.backtrack_to:
                     prev_phase = self._phase
-                    await self._backtrack.execute_backtrack(
-                        self._board, decision.backtrack_to
-                    )
+                    await self._backtrack.execute_backtrack(self._board, decision.backtrack_to)
                     self._phase = decision.backtrack_to
                     await self._ws_broadcast(
                         "Backtrack",
@@ -247,13 +243,12 @@ class OrchestrationEngine:
 
                 # 6. Dispatch agent -> get actions (带总超时，防止 LLM 调用永久挂起)
                 try:
-                    actions = await asyncio.wait_for(
-                        self._dispatch_agent(decision), timeout=300.0
-                    )
-                except asyncio.TimeoutError:
+                    actions = await asyncio.wait_for(self._dispatch_agent(decision), timeout=300.0)
+                except TimeoutError:
                     logger.error(
                         "[Engine] Agent %s timed out after 300s on iteration %d",
-                        decision.agent_to_invoke.value, self._iteration,
+                        decision.agent_to_invoke.value,
+                        self._iteration,
                     )
                     await self._ws_broadcast(
                         "AgentError",
@@ -278,30 +273,31 @@ class OrchestrationEngine:
                     except Exception as act_err:
                         logger.warning(
                             "[Engine] Skipping action %s from %s: %s",
-                            action.action_type.value, action.agent_role.value, act_err,
+                            action.action_type.value,
+                            action.agent_role.value,
+                            act_err,
                         )
                         continue
                     if action.action_type == ActionType.WRITE_ARTIFACT:
-                        artifact_updates.append({
-                            "artifact_type": action.content.get(
-                                "artifact_type", action.target
-                            ),
-                            "artifact_id": action.content.get("artifact_id", ""),
-                            "action": "created",
-                            "data": action.content,
-                        })
+                        artifact_updates.append(
+                            {
+                                "artifact_type": action.content.get("artifact_type", action.target),
+                                "artifact_id": action.content.get("artifact_id", ""),
+                                "action": "created",
+                                "data": action.content,
+                            }
+                        )
                         # Use agent_role instead of artifact_type string to
                         # reliably detect critic reviews (LLM often omits or
                         # mangles the artifact_type field).
                         if action.agent_role == AgentRole.CRITIC:
                             score = self._extract_critic_score(action.content)
                             if score is not None:
-                                await self._board.set_phase_critic_score(
-                                    self._phase, score
-                                )
+                                await self._board.set_phase_critic_score(self._phase, score)
                                 logger.info(
                                     "[Engine] Phase %s critic score updated to %.1f",
-                                    self._phase.value, score,
+                                    self._phase.value,
+                                    score,
                                 )
 
                 await self._ws_broadcast(
@@ -328,18 +324,14 @@ class OrchestrationEngine:
 
                 # 9. Convergence check
                 await self._board.increment_phase_iteration(self._phase)
-                signals = await self._convergence.check(
-                    self._board, self._phase
-                )
+                signals = await self._convergence.check(self._board, self._phase)
 
                 backtrack_to = await self._backtrack.should_backtrack(
                     self._board, self._phase, signals
                 )
                 if backtrack_to:
                     prev_phase = self._phase
-                    await self._backtrack.execute_backtrack(
-                        self._board, backtrack_to
-                    )
+                    await self._backtrack.execute_backtrack(self._board, backtrack_to)
                     self._phase = backtrack_to
                     await self._ws_broadcast(
                         "Backtrack",
@@ -350,9 +342,7 @@ class OrchestrationEngine:
                         },
                     )
                 elif signals.is_converged:
-                    self._phase = await self._advance_phase(
-                        self._board, self._phase
-                    )
+                    self._phase = await self._advance_phase(self._board, self._phase)
 
                 logger.info(
                     "Iteration %d | phase=%s | converged=%s",
@@ -362,9 +352,7 @@ class OrchestrationEngine:
                 )
 
         except Exception:
-            logger.exception(
-                "Orchestration loop failed at iteration %d", self._iteration
-            )
+            logger.exception("Orchestration loop failed at iteration %d", self._iteration)
             self._heartbeat.record_failure(self._project_id)
             raise
         finally:
@@ -382,9 +370,7 @@ class OrchestrationEngine:
     # Agent dispatch
     # ------------------------------------------------------------------
 
-    async def _dispatch_agent(
-        self, decision: OrchestratorDecision
-    ) -> list[BlackboardAction]:
+    async def _dispatch_agent(self, decision: OrchestratorDecision) -> list[BlackboardAction]:
         agent = self._agents.get(decision.agent_to_invoke)
         if not agent:
             logger.error(
@@ -393,15 +379,10 @@ class OrchestrationEngine:
             )
             return []
 
-        self._heartbeat.record_agent_status(
-            decision.agent_to_invoke.value, "executing"
-        )
+        self._heartbeat.record_agent_status(decision.agent_to_invoke.value, "executing")
 
         task = AgentTask(
-            task_id=(
-                f"{self._project_id}-{self._iteration}"
-                f"-{decision.agent_to_invoke.value}"
-            ),
+            task_id=(f"{self._project_id}-{self._iteration}-{decision.agent_to_invoke.value}"),
             description=decision.task_description,
             priority=decision.task_priority,
             allow_subagents=decision.allow_subagents,
@@ -424,13 +405,9 @@ class OrchestrationEngine:
                 if sr.success:
                     logger.info("SubAgent %s completed: %s", sr.subagent_id, sr.task)
                 else:
-                    logger.warning(
-                        "SubAgent %s failed: %s", sr.subagent_id, sr.error
-                    )
+                    logger.warning("SubAgent %s failed: %s", sr.subagent_id, sr.error)
 
-        self._heartbeat.record_agent_status(
-            decision.agent_to_invoke.value, "idle"
-        )
+        self._heartbeat.record_agent_status(decision.agent_to_invoke.value, "idle")
 
         return response.actions
 
@@ -491,7 +468,8 @@ class OrchestrationEngine:
             if phase_iters > _CHALLENGE_AUTO_DISMISS_AFTER:
                 logger.info(
                     "[Engine] Auto-dismissing challenge %s after %d iterations",
-                    ch.challenge_id, phase_iters,
+                    ch.challenge_id,
+                    phase_iters,
                 )
                 await board.resolve_challenge(
                     ch.challenge_id,
@@ -513,7 +491,7 @@ class OrchestrationEngine:
     async def _maybe_extract_trends(self) -> None:
         """Extract trend signals every N iterations during EXPLORE/EVIDENCE phases."""
         from backend.config import settings as cfg
-        from backend.types import ArtifactType as AT
+        from backend.types import ArtifactType as ArtType
 
         if not self._trend_extractor or not cfg.enable_trend_extraction:
             return
@@ -529,12 +507,13 @@ class OrchestrationEngine:
                 return
 
             import json
+
             action = BlackboardAction(
                 agent_role=AgentRole.SCIENTIST,
                 action_type=ActionType.WRITE_ARTIFACT,
                 target="trend_signals",
                 content={
-                    "artifact_type": AT.TREND_SIGNALS.value,
+                    "artifact_type": ArtType.TREND_SIGNALS.value,
                     "text": json.dumps(result, ensure_ascii=False),
                     "trends": result.get("trends", []),
                     "entities": result.get("entities", []),
@@ -547,7 +526,7 @@ class OrchestrationEngine:
             await self._ws_broadcast(
                 "ArtifactUpdated",
                 {
-                    "artifact_type": AT.TREND_SIGNALS.value,
+                    "artifact_type": ArtType.TREND_SIGNALS.value,
                     "artifact_id": f"trends-iter-{self._iteration}",
                     "action": "created",
                     "data": result,
@@ -565,10 +544,11 @@ class OrchestrationEngine:
     # Phase management
     # ------------------------------------------------------------------
 
-    async def _advance_phase(
-        self, board: Board, current_phase: ResearchPhase
-    ) -> ResearchPhase:
+    async def _advance_phase(self, board: Board, current_phase: ResearchPhase) -> ResearchPhase:
         next_phase = self._convergence.suggest_next_phase(current_phase)
+        # Single-lane engines skip SYNTHESIZE (goes COMPOSE → COMPLETE directly)
+        if next_phase == ResearchPhase.SYNTHESIZE and self._skip_synthesize:
+            next_phase = ResearchPhase.COMPLETE
         logger.info(
             "Phase transition: %s -> %s",
             current_phase.value,
@@ -604,7 +584,9 @@ class OrchestrationEngine:
                 "[Engine] ON-TOPIC CHECK FAILED at iteration %d: "
                 "only %.0f%% of topic keywords found in state summary. "
                 "Research may have drifted from: %r",
-                self._iteration, match_ratio * 100, self._research_topic[:80],
+                self._iteration,
+                match_ratio * 100,
+                self._research_topic[:80],
             )
             await self._ws_broadcast(
                 "TopicDriftWarning",
@@ -666,4 +648,5 @@ class OrchestrationEngine:
     @staticmethod
     async def _build_state_summary(board: Board) -> str:
         from backend.blackboard.context_builder import build_budget_context
+
         return await build_budget_context(board)

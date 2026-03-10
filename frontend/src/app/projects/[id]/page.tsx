@@ -47,6 +47,7 @@ interface Project {
   id: string;
   name: string;
   research_topic: string;
+  concurrency?: number;
   phase: string;
   status: string;
   created_at: string;
@@ -72,6 +73,7 @@ const PHASES = [
   { key: "hypothesize", label: "Hypothesize", icon: Lightbulb },
   { key: "evidence", label: "Evidence", icon: FileText },
   { key: "compose", label: "Compose", icon: BookOpen },
+  { key: "synthesize", label: "Synthesize", icon: TrendingUp },
   { key: "complete", label: "Complete", icon: CheckCircle2 },
 ];
 

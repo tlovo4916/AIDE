@@ -25,6 +25,7 @@ async function request<T>(
 export interface CreateProjectPayload {
   name: string;
   research_topic: string;
+  concurrency?: number;
   paper_ids?: string[];
 }
 
@@ -41,6 +42,7 @@ export function listProjects() {
       id: string;
       name: string;
       research_topic: string;
+      concurrency?: number;
       phase: string;
       status: string;
       created_at: string;
@@ -53,6 +55,7 @@ export function getProject(id: string) {
     id: string;
     name: string;
     research_topic: string;
+    concurrency?: number;
     phase: string;
     status: string;
     created_at: string;

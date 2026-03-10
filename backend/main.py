@@ -8,9 +8,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.api.settings import load_overrides
 from backend.config import settings
 from backend.models import init_db
-from backend.api.settings import load_overrides
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,9 +45,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from backend.api.projects import router as projects_router  # noqa: E402
-from backend.api.papers import router as papers_router  # noqa: E402
 from backend.api.checkpoints import router as checkpoints_router  # noqa: E402
+from backend.api.papers import router as papers_router  # noqa: E402
+from backend.api.projects import router as projects_router  # noqa: E402
 from backend.api.settings import router as settings_router  # noqa: E402
 from backend.api.ws import router as ws_router  # noqa: E402
 

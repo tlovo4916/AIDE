@@ -16,7 +16,6 @@ class _Section:
 
 
 class TokenBudget:
-
     def __init__(self, total: int) -> None:
         self._total = total
         self._encoder = tiktoken.get_encoding("cl100k_base")
@@ -29,17 +28,17 @@ class TokenBudget:
         max_ratio: float | None = None,
         fixed: bool = False,
     ) -> None:
-        self._sections.append(_Section(
-            name=section_name,
-            content=content,
-            max_ratio=max_ratio,
-            fixed=fixed,
-        ))
+        self._sections.append(
+            _Section(
+                name=section_name,
+                content=content,
+                max_ratio=max_ratio,
+                fixed=fixed,
+            )
+        )
 
     def assemble(self) -> str:
-        fixed_tokens = sum(
-            self._count(s.content) for s in self._sections if s.fixed
-        )
+        fixed_tokens = sum(self._count(s.content) for s in self._sections if s.fixed)
         remaining = max(0, self._total - fixed_tokens)
 
         parts: list[str] = []

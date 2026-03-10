@@ -35,10 +35,16 @@ async def get_session() -> AsyncSession:  # type: ignore[misc]
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Add concurrency column to existing projects table if missing
+        await conn.execute(
+            __import__("sqlalchemy").text(
+                "ALTER TABLE projects ADD COLUMN IF NOT EXISTS concurrency INTEGER DEFAULT 1"
+            )
+        )
 
 
-from backend.models.project import Project  # noqa: E402, F401
 from backend.models.checkpoint import Checkpoint  # noqa: E402, F401
+from backend.models.project import Project  # noqa: E402, F401
 from backend.models.token_usage import TokenUsage  # noqa: E402, F401
 
 __all__ = [

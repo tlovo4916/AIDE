@@ -16,11 +16,8 @@ def _tokenize(text: str) -> list[str]:
 
 
 class BM25Store:
-
     def __init__(self, persist_path: str | None = None) -> None:
-        self._persist_path = Path(
-            persist_path or str(settings.workspace_dir / "bm25_index.json")
-        )
+        self._persist_path = Path(persist_path or str(settings.workspace_dir / "bm25_index.json"))
         self._doc_ids: list[str] = []
         self._doc_texts: list[str] = []
         self._corpus: list[list[str]] = []
@@ -70,9 +67,7 @@ class BM25Store:
             return []
         tokens = _tokenize(query_text)
         scores = self._index.get_scores(tokens)
-        ranked = sorted(
-            zip(self._doc_ids, scores), key=lambda x: x[1], reverse=True
-        )
+        ranked = sorted(zip(self._doc_ids, scores), key=lambda x: x[1], reverse=True)
         return ranked[:n_results]
 
     def save(self) -> None:

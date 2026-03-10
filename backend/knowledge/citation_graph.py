@@ -12,11 +12,9 @@ from backend.config import settings
 
 
 class CitationGraph:
-
     def __init__(self, persist_path: str | None = None) -> None:
         self._persist_path = Path(
-            persist_path
-            or str(settings.workspace_dir / "citation_graph.json")
+            persist_path or str(settings.workspace_dir / "citation_graph.json")
         )
         self._graph = nx.DiGraph()
 

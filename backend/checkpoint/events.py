@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -63,7 +63,7 @@ class SubAgentCompletedEvent(WSPushEvent):
     subagent_id: str
     parent_role: str
     success: bool = True
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class ChallengeRaisedEvent(WSPushEvent):

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from backend.types import ArtifactType
 
@@ -54,7 +55,8 @@ _L1_PROMPTS: dict[ArtifactType, str] = {
     ),
     ArtifactType.HYPOTHESES: (
         "Create a structured JSON overview (max 500 tokens) of this hypothesis "
-        "with keys: statement, variables, assumptions, testability, related_hypotheses.\n\n{content}"
+        "with keys: statement, variables, assumptions, testability, "
+        "related_hypotheses.\n\n{content}"
     ),
     ArtifactType.EVIDENCE_FINDINGS: (
         "Create a structured JSON overview (max 500 tokens) of this evidence finding "
@@ -62,7 +64,8 @@ _L1_PROMPTS: dict[ArtifactType, str] = {
     ),
     ArtifactType.EVIDENCE_GAPS: (
         "Create a structured JSON overview (max 500 tokens) of this evidence gap "
-        "with keys: gap_description, importance, potential_sources, search_suggestions.\n\n{content}"
+        "with keys: gap_description, importance, potential_sources, "
+        "search_suggestions.\n\n{content}"
     ),
     ArtifactType.EXPERIMENT_GUIDE: (
         "Create a structured JSON overview (max 500 tokens) of this experiment guide "
@@ -78,7 +81,8 @@ _L1_PROMPTS: dict[ArtifactType, str] = {
     ),
     ArtifactType.REVIEW: (
         "Create a structured JSON overview (max 500 tokens) of this review "
-        "with keys: overall_score, strengths, weaknesses, critical_issues, suggestions.\n\n{content}"
+        "with keys: overall_score, strengths, weaknesses, critical_issues, "
+        "suggestions.\n\n{content}"
     ),
 }
 
@@ -102,46 +106,43 @@ def _strip_markdown_fences(text: str) -> str:
 
 
 class LevelGenerator:
-
     def __init__(self, llm_call: LLMCall) -> None:
         self._llm_call = llm_call
 
     async def generate_l0(self, content_l2: str, artifact_type: ArtifactType) -> str:
-        prompt_template = _L0_PROMPTS.get(
-            artifact_type, _L0_PROMPTS[ArtifactType.DIRECTIONS]
-        )
+        prompt_template = _L0_PROMPTS.get(artifact_type, _L0_PROMPTS[ArtifactType.DIRECTIONS])
         prompt = prompt_template.format(content=content_l2)
         try:
-            result = await self._llm_call([
-                {
-                    "role": "system",
-                    "content": "You are a concise summarizer. Output only the summary.",
-                },
-                {"role": "user", "content": prompt},
-            ])
+            result = await self._llm_call(
+                [
+                    {
+                        "role": "system",
+                        "content": "You are a concise summarizer. Output only the summary.",
+                    },
+                    {"role": "user", "content": prompt},
+                ]
+            )
             return result.strip()
         except Exception as exc:
             logger.warning("LLM L0 generation failed, using truncation: %s", exc)
             return self._truncate_l0(content_l2)
 
-    async def generate_l1(
-        self, content_l2: str, artifact_type: ArtifactType
-    ) -> dict[str, Any]:
-        prompt_template = _L1_PROMPTS.get(
-            artifact_type, _L1_PROMPTS[ArtifactType.DIRECTIONS]
-        )
+    async def generate_l1(self, content_l2: str, artifact_type: ArtifactType) -> dict[str, Any]:
+        prompt_template = _L1_PROMPTS.get(artifact_type, _L1_PROMPTS[ArtifactType.DIRECTIONS])
         prompt = prompt_template.format(content=content_l2)
         try:
-            result = await self._llm_call([
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a structured summarizer. "
-                        "Output raw JSON only. No markdown fences, no comments, no explanation."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ])
+            result = await self._llm_call(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a structured summarizer. "
+                            "Output raw JSON only. No markdown fences, no comments, no explanation."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ]
+            )
             cleaned = _strip_markdown_fences(result.strip())
             return json.loads(cleaned)
         except json.JSONDecodeError:

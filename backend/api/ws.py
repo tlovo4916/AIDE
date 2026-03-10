@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -107,6 +106,7 @@ async def _handle_checkpoint_response(
     request_id: str | None,
 ) -> None:
     from backend.orchestrator.factory import get_checkpoint_manager
+
     checkpoint_id = payload.get("checkpoint_id", "")
     action_str = payload.get("action", "skip")
     feedback = payload.get("feedback")
@@ -139,9 +139,7 @@ async def websocket_endpoint(ws: WebSocket, project_id: str) -> None:
             try:
                 frame = WSFrame.model_validate(raw)
             except Exception:
-                await manager.send_response(
-                    ws, "error", {"message": "Invalid frame format"}
-                )
+                await manager.send_response(ws, "error", {"message": "Invalid frame format"})
                 continue
 
             if frame.type == WSFrameType.REQUEST:

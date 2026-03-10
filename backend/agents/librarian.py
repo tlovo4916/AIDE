@@ -4,21 +4,34 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+from typing import TYPE_CHECKING
 
 from backend.agents.base import BaseAgent
 from backend.config import settings
 from backend.types import AgentResponse, AgentRole, AgentTask, ArtifactType
 
+if TYPE_CHECKING:
+    from backend.knowledge.web_retriever import WebRetriever
+
 logger = logging.getLogger(__name__)
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
 
+# S2 cooldown: after 429, skip S2 for this many seconds
+_S2_COOLDOWN_SECONDS = 300  # 5 minutes
+
+
+def _normalize_cache_key(query: str) -> str:
+    """Normalize a query into a stable cache key (sorted lowercase keywords)."""
+    words = re.findall(r"[a-zA-Z]+", query.lower())
+    return " ".join(sorted(set(words)))
+
 
 class LibrarianAgent(BaseAgent):
-
     role = AgentRole.LIBRARIAN
     system_prompt_template = "librarian.j2"
-    preferred_model = "deepseek-reasoner"
+    preferred_model = "deepseek-chat"
     primary_artifact_types = [ArtifactType.EVIDENCE_FINDINGS]
     dependency_artifact_types = [
         ArtifactType.HYPOTHESES,
@@ -29,14 +42,14 @@ class LibrarianAgent(BaseAgent):
 
     # Cache already-queried search terms to avoid duplicate API calls
     _query_cache: set[str] = set()
+    # Timestamp when S2 last returned 429; skip S2 until cooldown expires
+    _s2_cooldown_until: float = 0.0
 
     async def execute(self, context: str, task: AgentTask) -> AgentResponse:
         enriched = await self._enrich_context_with_literature(context, task)
         return await super().execute(enriched, task)
 
-    async def _enrich_context_with_literature(
-        self, context: str, task: AgentTask
-    ) -> str:
+    async def _enrich_context_with_literature(self, context: str, task: AgentTask) -> str:
         if not settings.enable_web_retrieval:
             logger.info("[Librarian] Web retrieval disabled, skipping")
             return context
@@ -94,7 +107,8 @@ class LibrarianAgent(BaseAgent):
 
         logger.info(
             "[Librarian] Injected %d real papers into context (query=%s)",
-            len(papers), en_query[:60],
+            len(papers),
+            en_query[:60],
         )
         return context + "\n" + "\n".join(lines)
 
@@ -116,96 +130,143 @@ class LibrarianAgent(BaseAgent):
             bm25_store = BM25Store(persist_path=bm25_path)
             bm25_store.load()
 
-            # Try hybrid search (vector + BM25) first; fall back to BM25-only
-            # if embedding service fails (common cause: SSL errors in Docker).
-            try:
-                from backend.knowledge.embeddings import EmbeddingService
-                from backend.knowledge.hybrid_search import HybridSearchEngine
-                from backend.knowledge.vector_store import VectorStore
-
-                collection_name = f"aide_{pid.replace('-', '_')}"
-                vector_store = VectorStore(collection_name=collection_name)
-                embedding_service = EmbeddingService()
+            # Try hybrid search (vector + BM25) only if OpenAI key is
+            # configured; otherwise go straight to BM25-only to avoid
+            # wasting time on guaranteed SSL/auth failures.
+            openai_key = _cfg.openai_api_key
+            if openai_key:
                 try:
-                    engine = HybridSearchEngine(vector_store, bm25_store, embedding_service)
-                    results = await engine.search([query], top_k=5)
-                    return [
-                        {
-                            "chunk_id": r.chunk_id,
-                            "content": r.content,
-                            "source": r.source,
-                            "score": r.score,
-                            "metadata": r.metadata,
-                        }
-                        for r in results
-                    ]
-                finally:
-                    await embedding_service.close()
-            except Exception as embed_exc:
-                logger.warning(
-                    "[Librarian] Hybrid search failed (SSL?), falling back to BM25-only: %s",
-                    embed_exc,
-                )
-                # BM25-only fallback — no embedding needed
-                # query() returns list[tuple[doc_id, score]]
-                bm25_hits = bm25_store.query(query, n_results=5)
-                return [
-                    {
-                        "chunk_id": doc_id,
-                        "content": "",
-                        "source": "bm25",
-                        "score": score,
-                        "metadata": {},
-                    }
-                    for doc_id, score in bm25_hits
-                ]
+                    from backend.knowledge.embeddings import EmbeddingService
+                    from backend.knowledge.hybrid_search import HybridSearchEngine
+                    from backend.knowledge.vector_store import VectorStore
+
+                    collection_name = f"aide_{pid.replace('-', '_')}"
+                    vector_store = VectorStore(collection_name=collection_name)
+                    embedding_service = EmbeddingService()
+                    try:
+                        engine = HybridSearchEngine(
+                            vector_store,
+                            bm25_store,
+                            embedding_service,
+                        )
+                        results = await engine.search([query], top_k=5)
+                        return [
+                            {
+                                "chunk_id": r.chunk_id,
+                                "content": r.content,
+                                "source": r.source,
+                                "score": r.score,
+                                "metadata": r.metadata,
+                            }
+                            for r in results
+                        ]
+                    finally:
+                        await embedding_service.close()
+                except Exception as embed_exc:
+                    logger.warning(
+                        "[Librarian] Hybrid search failed: %s",
+                        embed_exc,
+                    )
+
+            # BM25-only fallback — no embedding needed.
+            # Return doc content from BM25Store._doc_texts.
+            bm25_hits = bm25_store.query(query, n_results=5)
+            if not bm25_hits:
+                return []
+            # Resolve content from stored doc texts
+            id_to_idx = {did: i for i, did in enumerate(bm25_store._doc_ids)}
+            return [
+                {
+                    "chunk_id": doc_id,
+                    "content": (
+                        bm25_store._doc_texts[id_to_idx[doc_id]][:500]
+                        if doc_id in id_to_idx
+                        else ""
+                    ),
+                    "source": "bm25",
+                    "score": score,
+                    "metadata": {},
+                }
+                for doc_id, score in bm25_hits
+            ]
         except Exception as exc:
             logger.warning("[Librarian] Local knowledge search failed: %s", exc)
             return []
 
     async def _search_with_fallback(
         self,
-        retriever: "WebRetriever",
+        retriever: WebRetriever,
         original_query: str,
         en_query: str,
     ) -> list[dict]:
-        # Deduplicate: skip if we've already searched this query this session
-        cache_key = en_query.lower().strip()
+        # Deduplicate: normalize to sorted keyword set for stable cache key
+        cache_key = _normalize_cache_key(en_query)
         if cache_key in self._query_cache:
             logger.info("[Librarian] Skipping duplicate query: %s", en_query[:60])
             return []
         self._query_cache.add(cache_key)
 
-        # 1) Semantic Scholar with original query (best multilingual support)
-        try:
-            papers = await retriever.search_semantic_scholar(original_query, limit=5)
-            if papers:
-                logger.info("[Librarian] Semantic Scholar returned %d papers", len(papers))
-                return papers
-        except Exception as exc:
-            logger.warning("[Librarian] Semantic Scholar search failed: %s", exc)
+        s2_available = time.monotonic() >= self._s2_cooldown_until
 
-        # 2) arXiv with English query
-        try:
-            papers = await retriever.search_arxiv(en_query, limit=5)
-            if papers:
-                logger.info("[Librarian] arXiv returned %d papers", len(papers))
-                return papers
-        except Exception as exc:
-            logger.warning("[Librarian] arXiv search failed: %s", exc)
-
-        # 3) Semantic Scholar with English query (final fallback)
-        if en_query != original_query:
+        # 1) Semantic Scholar (skip if in cooldown from 429)
+        if s2_available:
             try:
-                papers = await retriever.search_semantic_scholar(en_query, limit=5)
+                papers = await retriever.search_semantic_scholar(
+                    original_query,
+                    limit=5,
+                )
                 if papers:
                     logger.info(
-                        "[Librarian] Semantic Scholar (EN fallback) returned %d papers",
+                        "[Librarian] Semantic Scholar returned %d papers",
                         len(papers),
                     )
                     return papers
             except Exception as exc:
-                logger.warning("[Librarian] Semantic Scholar EN fallback failed: %s", exc)
+                exc_str = str(exc)
+                logger.warning("[Librarian] S2 search failed: %s", exc_str)
+                if "429" in exc_str:
+                    self.__class__._s2_cooldown_until = time.monotonic() + _S2_COOLDOWN_SECONDS
+                    logger.info(
+                        "[Librarian] S2 429 detected, cooldown %ds",
+                        _S2_COOLDOWN_SECONDS,
+                    )
+        else:
+            remaining = int(self._s2_cooldown_until - time.monotonic())
+            logger.info(
+                "[Librarian] S2 in cooldown (%ds left), skipping to arXiv",
+                remaining,
+            )
+
+        # 2) arXiv with English query (fast, no rate limit issues)
+        try:
+            papers = await retriever.search_arxiv(en_query, limit=5)
+            if papers:
+                logger.info(
+                    "[Librarian] arXiv returned %d papers",
+                    len(papers),
+                )
+                return papers
+        except Exception as exc:
+            logger.warning("[Librarian] arXiv search failed: %s", exc)
+
+        # 3) Semantic Scholar with English query (final fallback, skip if cooldown)
+        if s2_available and en_query != original_query:
+            try:
+                papers = await retriever.search_semantic_scholar(
+                    en_query,
+                    limit=5,
+                )
+                if papers:
+                    logger.info(
+                        "[Librarian] S2 EN fallback returned %d papers",
+                        len(papers),
+                    )
+                    return papers
+            except Exception as exc:
+                logger.warning(
+                    "[Librarian] S2 EN fallback failed: %s",
+                    exc,
+                )
 
         return []
 

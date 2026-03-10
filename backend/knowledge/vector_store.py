@@ -10,7 +10,6 @@ from backend.config import settings
 
 
 class VectorStore:
-
     def __init__(
         self,
         persist_dir: str | None = None,

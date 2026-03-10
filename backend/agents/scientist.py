@@ -7,7 +7,6 @@ from backend.types import AgentRole, ArtifactType
 
 
 class ScientistAgent(BaseAgent):
-
     role = AgentRole.SCIENTIST
     system_prompt_template = "scientist.j2"
     preferred_model = "deepseek-reasoner"

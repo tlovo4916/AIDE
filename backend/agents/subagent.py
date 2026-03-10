@@ -15,7 +15,7 @@ from backend.types import AgentRole, SubAgentRequest, SubAgentResult
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 300.0  # 5 minutes
-_SUBAGENT_MODEL = "deepseek-reasoner"
+_SUBAGENT_MODEL = "deepseek-chat"
 
 
 @runtime_checkable
@@ -64,9 +64,7 @@ class SubAgent:
         self._llm_router = llm_router
         self._scratch_dir = workspace_path / "scratch" / "subagents" / self.id
 
-    async def execute(
-        self, context_builder: ContextBuilder, board: Board
-    ) -> SubAgentResult:
+    async def execute(self, context_builder: ContextBuilder, board: Board) -> SubAgentResult:
         self._scratch_dir.mkdir(parents=True, exist_ok=True)
         try:
             context = await context_builder.build(self.parent_role, self.task)
@@ -96,7 +94,7 @@ class SubAgent:
         return (
             "You are a focused research sub-agent. "
             "Complete the task below and return a JSON object with keys: "
-            "\"findings\", \"summary\", \"references\".\n\n"
+            '"findings", "summary", "references".\n\n'
             f"## Context\n\n{context}\n\n"
             f"## Task\n\n{self.task}\n\n"
             f"## Available Tools\n\n{', '.join(self.tools) or 'none'}\n"
@@ -171,8 +169,7 @@ class SubAgentPool:
             self._active[a.id] = a
 
         task_map: dict[asyncio.Task[SubAgentResult], SubAgent] = {
-            asyncio.create_task(a.execute(context_builder, board)): a
-            for a in agents
+            asyncio.create_task(a.execute(context_builder, board)): a for a in agents
         }
 
         try:

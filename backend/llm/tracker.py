@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.types import AgentRole
@@ -15,19 +15,16 @@ from backend.types import AgentRole
 logger = logging.getLogger(__name__)
 
 COST_PER_1K: dict[str, dict[str, float]] = {
-    "deepseek-chat":       {"prompt": 0.0014, "completion": 0.0028},
-    "deepseek-reasoner":   {"prompt": 0.0055, "completion": 0.0219},
-    "gpt":                 {"prompt": 0.003,  "completion": 0.012},
-    "gemini-pro":          {"prompt": 0.00125,"completion": 0.005},
-    "opus":                {"prompt": 0.015,  "completion": 0.075},
+    "deepseek-chat": {"prompt": 0.0014, "completion": 0.0028},
+    "deepseek-reasoner": {"prompt": 0.0055, "completion": 0.0219},
+    "gpt": {"prompt": 0.003, "completion": 0.012},
+    "gemini-pro": {"prompt": 0.00125, "completion": 0.005},
+    "opus": {"prompt": 0.015, "completion": 0.075},
 }
 
 
 class TokenTracker:
-
-    def __init__(
-        self, session_factory: async_sessionmaker[AsyncSession] | None = None
-    ) -> None:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession] | None = None) -> None:
         self._session_factory = session_factory
         self._memory_log: list[dict[str, Any]] = []
 
@@ -40,8 +37,7 @@ class TokenTracker:
         key = _resolve_cost_key(model)
         rates = COST_PER_1K.get(key, {"prompt": 0.01, "completion": 0.03})
         return (
-            prompt_tokens / 1000 * rates["prompt"]
-            + completion_tokens / 1000 * rates["completion"]
+            prompt_tokens / 1000 * rates["prompt"] + completion_tokens / 1000 * rates["completion"]
         )
 
     async def record_usage(
@@ -66,6 +62,7 @@ class TokenTracker:
 
         if self._session_factory:
             from backend.models.token_usage import TokenUsage
+
             try:
                 async with self._session_factory() as session:
                     session.add(
@@ -86,6 +83,7 @@ class TokenTracker:
     async def get_project_usage(self, project_id: str) -> dict[str, Any]:
         if self._session_factory:
             from backend.models.token_usage import TokenUsage
+
             try:
                 async with self._session_factory() as session:
                     stmt = (

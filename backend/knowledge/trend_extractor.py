@@ -108,11 +108,9 @@ class TrendExtractor:
             logger.warning("[TrendExtractor] Trend analysis failed: %s", exc)
         return {"trends": [], "summary": ""}
 
-    async def process_evidence_artifacts(
-        self, board: Any
-    ) -> dict[str, Any] | None:
+    async def process_evidence_artifacts(self, board: Any) -> dict[str, Any] | None:
         """Full pipeline: collect evidence texts -> extract entities -> analyze trends."""
-        from backend.types import ArtifactType, ContextLevel
+        from backend.types import ContextLevel
 
         try:
             summary = await board.get_state_summary(ContextLevel.L1)

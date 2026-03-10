@@ -7,10 +7,9 @@ from backend.types import AgentRole, ArtifactType
 
 
 class WriterAgent(BaseAgent):
-
     role = AgentRole.WRITER
     system_prompt_template = "writer.j2"
-    preferred_model = "deepseek-reasoner"
+    preferred_model = "deepseek-chat"
     primary_artifact_types = [
         ArtifactType.OUTLINE,
         ArtifactType.DRAFT,

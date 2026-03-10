@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from backend.types import ArtifactType, ContextLevel, DedupDecision
 
@@ -52,7 +53,6 @@ class DedupCheckResult:
 
 
 class DedupCompressor:
-
     def __init__(self, embedding_service: EmbeddingService) -> None:
         self._embeddings = embedding_service
 
@@ -73,7 +73,11 @@ class DedupCompressor:
 
         merge_policy = _MERGE_POLICIES.get(new_artifact_type, "never")
         return await self._llm_dedup_decision(
-            new_content, candidates, new_artifact_type, merge_policy, llm_call,
+            new_content,
+            candidates,
+            new_artifact_type,
+            merge_policy,
+            llm_call,
         )
 
     # ------------------------------------------------------------------
@@ -99,7 +103,10 @@ class DedupCompressor:
             if ver == 0:
                 continue
             l0 = await board.read_artifact(
-                artifact_type, m.artifact_id, ver, ContextLevel.L0,
+                artifact_type,
+                m.artifact_id,
+                ver,
+                ContextLevel.L0,
             )
             if l0 and isinstance(l0, str):
                 l0_texts.append(l0)
@@ -129,9 +136,7 @@ class DedupCompressor:
         merge_policy: str,
         llm_call: LLMCall,
     ) -> DedupCheckResult:
-        candidate_desc = "\n".join(
-            f"- ID: {cid}, Similarity: {sim:.3f}" for cid, sim in candidates
-        )
+        candidate_desc = "\n".join(f"- ID: {cid}, Similarity: {sim:.3f}" for cid, sim in candidates)
         prompt = (
             f"A new {artifact_type.value} artifact is being created. "
             f"Similar existing artifacts were found:\n{candidate_desc}\n\n"
@@ -143,16 +148,17 @@ class DedupCompressor:
         )
 
         try:
-            result = await llm_call([
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a deduplication assistant. "
-                        "Respond with valid JSON only."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ])
+            result = await llm_call(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a deduplication assistant. Respond with valid JSON only."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ]
+            )
             data = json.loads(result.strip())
             decision = DedupDecision(data.get("decision", "create").lower())
 

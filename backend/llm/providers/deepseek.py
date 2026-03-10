@@ -28,7 +28,6 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
 
 class DeepSeekProvider:
-
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key or settings.deepseek_api_key or ""
         self._client = httpx.AsyncClient(
@@ -82,8 +81,12 @@ class DeepSeekProvider:
             if response_format:
                 payload["response_format"] = response_format
 
-        log.info("DeepSeek call: model=%s, messages=%d, is_reasoner=%s",
-                 model, len(clean_msgs), is_reasoner)
+        log.info(
+            "DeepSeek call: model=%s, messages=%d, is_reasoner=%s",
+            model,
+            len(clean_msgs),
+            is_reasoner,
+        )
 
         resp = await self._client.post(DEEPSEEK_API_URL, json=payload)
         resp.raise_for_status()
@@ -101,17 +104,21 @@ class DeepSeekProvider:
 
         if not content:
             log.warning(
-                "DeepSeek returned empty content for model=%s, "
-                "finish_reason=%s, reasoning_len=%d",
-                model, choice.get("finish_reason"), len(reasoning_content),
+                "DeepSeek returned empty content for model=%s, finish_reason=%s, reasoning_len=%d",
+                model,
+                choice.get("finish_reason"),
+                len(reasoning_content),
             )
 
         log.info(
             "DeepSeek response: model=%s, finish=%s, content_len=%d, "
             "reasoning_len=%d, prompt_tok=%d, compl_tok=%d",
-            model, choice.get("finish_reason"),
-            len(content), len(reasoning_content),
-            usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+            model,
+            choice.get("finish_reason"),
+            len(content),
+            len(reasoning_content),
+            usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
         )
 
         return LLMResponse(

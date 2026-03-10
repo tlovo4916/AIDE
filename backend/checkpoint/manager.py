@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any
 
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -18,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 
 class CheckpointManager:
-
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
@@ -27,7 +27,7 @@ class CheckpointManager:
         self._session_factory = session_factory
         self._ws_broadcast = ws_broadcast
         self._pending: dict[str, asyncio.Event] = {}
-        self._responses: dict[str, tuple[CheckpointAction, Optional[str]]] = {}
+        self._responses: dict[str, tuple[CheckpointAction, str | None]] = {}
         self._meta: dict[str, dict[str, Any]] = {}
 
     async def create_checkpoint(
@@ -68,18 +68,20 @@ class CheckpointManager:
         }
 
         if self._ws_broadcast:
-            await self._ws_broadcast({
-                "event_type": "CheckpointCreated",
-                "id": checkpoint_id,
-                "project_id": project_id,
-                "phase": phase.value,
-                "summary": reason,
-                "options": [
-                    {"label": "Approve", "value": "approve"},
-                    {"label": "Adjust", "value": "adjust"},
-                    {"label": "Skip", "value": "skip"},
-                ],
-            })
+            await self._ws_broadcast(
+                {
+                    "event_type": "CheckpointCreated",
+                    "id": checkpoint_id,
+                    "project_id": project_id,
+                    "phase": phase.value,
+                    "summary": reason,
+                    "options": [
+                        {"label": "Approve", "value": "approve"},
+                        {"label": "Adjust", "value": "adjust"},
+                        {"label": "Skip", "value": "skip"},
+                    ],
+                }
+            )
 
         return event
 
@@ -87,21 +89,23 @@ class CheckpointManager:
         self,
         checkpoint_id: str,
         timeout_minutes: int = 30,
-    ) -> tuple[CheckpointAction, Optional[str]]:
+    ) -> tuple[CheckpointAction, str | None]:
         evt = self._pending.get(checkpoint_id)
         if evt is None:
             return CheckpointAction.SKIP, None
 
         try:
             await asyncio.wait_for(evt.wait(), timeout=timeout_minutes * 60)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.info("Checkpoint %s timed out, auto-skipping", checkpoint_id)
             self._responses.setdefault(
-                checkpoint_id, (CheckpointAction.SKIP, None),
+                checkpoint_id,
+                (CheckpointAction.SKIP, None),
             )
 
         action, feedback = self._responses.pop(
-            checkpoint_id, (CheckpointAction.SKIP, None),
+            checkpoint_id,
+            (CheckpointAction.SKIP, None),
         )
         self._pending.pop(checkpoint_id, None)
 
@@ -109,12 +113,14 @@ class CheckpointManager:
         await self._persist_resolution(checkpoint_id, action, feedback)
 
         if self._ws_broadcast:
-            await self._ws_broadcast({
-                "event_type": "CheckpointResolved",
-                "id": checkpoint_id,
-                "project_id": meta.get("project_id", ""),
-                "response": action.value,
-            })
+            await self._ws_broadcast(
+                {
+                    "event_type": "CheckpointResolved",
+                    "id": checkpoint_id,
+                    "project_id": meta.get("project_id", ""),
+                    "response": action.value,
+                }
+            )
 
         return action, feedback
 

@@ -81,6 +81,7 @@ class BaseAgent(ABC):
     def _resolve_model(self) -> str:
         """Return the model to use, respecting user overrides via settings."""
         from backend.config import settings
+
         overrides = settings.agent_model_overrides
         role_key = self.role.value
         if overrides and role_key in overrides and overrides[role_key]:
@@ -90,6 +91,19 @@ class BaseAgent(ABC):
     async def execute(self, context: str, task: AgentTask) -> AgentResponse:
         prompt = self._build_prompt(context, task)
         model = self._resolve_model()
+
+        # Claude models need stronger JSON enforcement — they tend to
+        # produce natural-language prose instead of structured JSON.
+        if model.startswith("claude-"):
+            prompt += (
+                "\n\n---\n"
+                "CRITICAL INSTRUCTION: You MUST respond with a single valid JSON "
+                "object matching the schema above. Do NOT write prose, markdown, "
+                "or explanations outside the JSON. Start your response with `{` "
+                "and end with `}`. Keep action content concise to stay within "
+                "the token limit."
+            )
+
         raw = await self._llm_router.generate(model, prompt)
 
         response = self._parse_response(raw)
@@ -162,7 +176,8 @@ class BaseAgent(ABC):
         except Exception as exc:
             logger.warning(
                 "Agent %s: AgentResponse validation failed (%s), returning summary",
-                self.role.value, exc,
+                self.role.value,
+                exc,
             )
             return AgentResponse(reasoning_summary=raw[:500])
 

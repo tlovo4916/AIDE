@@ -7,12 +7,12 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
-from backend.models import get_session, Project
+from backend.models import Project, get_session
 from backend.orchestrator import factory as engine_factory
 from backend.types import ArtifactType, ResearchPhase
 
@@ -23,6 +23,7 @@ class ProjectCreate(BaseModel):
     name: str
     description: str = ""
     research_topic: str = ""
+    concurrency: int = Field(default=1, ge=1, le=5)
     config_json: dict | None = None
 
 
@@ -31,6 +32,7 @@ class ProjectOut(BaseModel):
     name: str
     description: str
     research_topic: str
+    concurrency: int = 1
     phase: str
     status: str
     config_json: dict | None
@@ -49,6 +51,7 @@ async def create_project(
         name=body.name,
         description=body.description,
         research_topic=body.research_topic,
+        concurrency=body.concurrency,
         phase=ResearchPhase.EXPLORE.value,
         status="active",
         config_json=body.config_json,
@@ -136,7 +139,11 @@ async def get_blackboard(project_id: uuid.UUID) -> dict:
                         continue
                     # 读最新版本内容
                     versions = sorted(
-                        [d for d in artifact_dir.iterdir() if d.is_dir() and d.name.startswith("v")],
+                        [
+                            d
+                            for d in artifact_dir.iterdir()
+                            if d.is_dir() and d.name.startswith("v")
+                        ],
                         key=lambda d: int(d.name[1:]) if d.name[1:].isdigit() else 0,
                     )
                     content = ""
@@ -144,11 +151,13 @@ async def get_blackboard(project_id: uuid.UUID) -> dict:
                         l2 = versions[-1] / "l2.json"
                         if l2.exists():
                             content = l2.read_text()
-                    items.append({
-                        "id": meta.get("artifact_id", artifact_dir.name),
-                        "type": at.value,
-                        "data": {"content": content, **meta},
-                    })
+                    items.append(
+                        {
+                            "id": meta.get("artifact_id", artifact_dir.name),
+                            "type": at.value,
+                            "data": {"content": content, **meta},
+                        }
+                    )
                 except Exception:
                     continue
             if items:
@@ -160,12 +169,14 @@ async def get_blackboard(project_id: uuid.UUID) -> dict:
         for f in sorted(challenges_dir.glob("*.json")):
             try:
                 data = json.loads(f.read_text())
-                challenges.append({
-                    "id": data.get("challenge_id", f.stem),
-                    "from": data.get("challenger", ""),
-                    "message": data.get("argument", ""),
-                    "resolved": data.get("status", "") == "resolved",
-                })
+                challenges.append(
+                    {
+                        "id": data.get("challenge_id", f.stem),
+                        "from": data.get("challenger", ""),
+                        "message": data.get("argument", ""),
+                        "resolved": data.get("status", "") == "resolved",
+                    }
+                )
             except Exception:
                 continue
 
@@ -176,12 +187,14 @@ async def get_blackboard(project_id: uuid.UUID) -> dict:
         for f in msg_files:
             try:
                 data = json.loads(f.read_text())
-                messages.append({
-                    "id": data.get("message_id", f.stem),
-                    "role": data.get("from_agent", ""),
-                    "content": data.get("content", ""),
-                    "timestamp": data.get("created_at", ""),
-                })
+                messages.append(
+                    {
+                        "id": data.get("message_id", f.stem),
+                        "role": data.get("from_agent", ""),
+                        "content": data.get("content", ""),
+                        "timestamp": data.get("created_at", ""),
+                    }
+                )
             except Exception:
                 continue
 

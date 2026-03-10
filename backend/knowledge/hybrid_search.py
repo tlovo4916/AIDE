@@ -8,11 +8,11 @@ from typing import Any
 
 import numpy as np
 
-from backend.types import SearchResult
 from backend.config import settings
-from backend.knowledge.vector_store import VectorStore
 from backend.knowledge.bm25_store import BM25Store
 from backend.knowledge.embeddings import EmbeddingService
+from backend.knowledge.vector_store import VectorStore
+from backend.types import SearchResult
 
 RRF_K = 60
 
@@ -27,7 +27,6 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 class HybridSearchEngine:
-
     def __init__(
         self,
         vector_store: VectorStore,
@@ -48,9 +47,7 @@ class HybridSearchEngine:
         top_k = top_k or settings.hybrid_search_top_k
         mmr_lambda = mmr_lambda if mmr_lambda is not None else settings.mmr_lambda
         time_decay_factor = (
-            time_decay_factor
-            if time_decay_factor is not None
-            else settings.time_decay_factor
+            time_decay_factor if time_decay_factor is not None else settings.time_decay_factor
         )
 
         query_embeddings = await self._embed.embed_batch(queries)
@@ -59,9 +56,7 @@ class HybridSearchEngine:
             query_embeddings=query_embeddings,
             n_results=top_k * 2,
         )
-        bm25_results_per_query = [
-            self._bm25.query(q, n_results=top_k * 2) for q in queries
-        ]
+        bm25_results_per_query = [self._bm25.query(q, n_results=top_k * 2) for q in queries]
 
         rrf_scores: dict[str, float] = {}
         doc_data: dict[str, dict[str, Any]] = {}
@@ -71,9 +66,7 @@ class HybridSearchEngine:
                 docs = vector_results.get("documents", [[]])[qi]
                 metas = vector_results.get("metadatas", [[]])[qi]
                 distances = vector_results.get("distances", [[]])[qi]
-                for rank, (did, doc, meta, dist) in enumerate(
-                    zip(ids, docs, metas, distances)
-                ):
+                for rank, (did, doc, meta, dist) in enumerate(zip(ids, docs, metas, distances)):
                     rrf_scores[did] = rrf_scores.get(did, 0.0) + 1.0 / (RRF_K + rank + 1)
                     if did not in doc_data:
                         doc_data[did] = {
@@ -147,7 +140,7 @@ class HybridSearchEngine:
         if not candidates:
             return []
 
-        avg_qe = np.mean(query_embeddings, axis=0).tolist()
+        np.mean(query_embeddings, axis=0).tolist()
 
         candidate_embeddings: dict[str, list[float]] = {}
         for did, _ in candidates:

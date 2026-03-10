@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from backend.types import ActionType, AgentRole, BlackboardAction
 
@@ -29,7 +29,6 @@ def _strip_markdown_fences(text: str) -> str:
 
 
 class WriteBackGuard:
-
     def __init__(self, llm_call: LLMCall) -> None:
         self._llm_call = llm_call
 
@@ -45,10 +44,7 @@ class WriteBackGuard:
         truncated_response = agent_response[:3000]
 
         executed_summary = json.dumps(
-            [
-                {"type": a.action_type.value, "target": a.target}
-                for a in executed_actions
-            ],
+            [{"type": a.action_type.value, "target": a.target} for a in executed_actions],
             ensure_ascii=False,
         )
 
@@ -65,27 +61,26 @@ class WriteBackGuard:
         )
 
         try:
-            result = await self._llm_call([
-                {
-                    "role": "system",
-                    "content": (
-                        "You identify unpersisted reasoning in agent outputs. "
-                        "Respond with a valid JSON array only. "
-                        "No markdown fences, no explanation."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ])
+            result = await self._llm_call(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You identify unpersisted reasoning in agent outputs. "
+                            "Respond with a valid JSON array only. "
+                            "No markdown fences, no explanation."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ]
+            )
 
             cleaned = _strip_markdown_fences(result.strip())
             insights = json.loads(cleaned)
             if not isinstance(insights, list) or not insights:
                 return []
 
-            agent_role = (
-                executed_actions[0].agent_role
-                if executed_actions else AgentRole.DIRECTOR
-            )
+            agent_role = executed_actions[0].agent_role if executed_actions else AgentRole.DIRECTOR
 
             additional: list[BlackboardAction] = []
             for item in insights:

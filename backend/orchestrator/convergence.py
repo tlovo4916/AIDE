@@ -15,6 +15,7 @@ _PHASE_ORDER = [
     ResearchPhase.HYPOTHESIZE,
     ResearchPhase.EVIDENCE,
     ResearchPhase.COMPOSE,
+    ResearchPhase.SYNTHESIZE,
     ResearchPhase.COMPLETE,
 ]
 
@@ -50,24 +51,16 @@ class ConvergenceDetector:
             else settings.convergence_min_critic_score
         )
         self._stable_rounds = (
-            stable_rounds
-            if stable_rounds is not None
-            else settings.convergence_stable_rounds
+            stable_rounds if stable_rounds is not None else settings.convergence_stable_rounds
         )
         self._max_iterations = (
-            max_iterations
-            if max_iterations is not None
-            else settings.max_iterations_per_phase
+            max_iterations if max_iterations is not None else settings.max_iterations_per_phase
         )
 
-    async def check(
-        self, board: Board, phase: ResearchPhase
-    ) -> ConvergenceSignals:
+    async def check(self, board: Board, phase: ResearchPhase) -> ConvergenceSignals:
         open_challenges = await board.get_open_challenge_count()
         critic_score = await board.get_phase_critic_score(phase)
-        revision_count = await board.get_recent_revision_count(
-            self._stable_rounds
-        )
+        revision_count = await board.get_recent_revision_count(self._stable_rounds)
         iteration_count = await board.get_phase_iteration_count(phase)
 
         converged = self.is_phase_converged(
@@ -89,9 +82,7 @@ class ConvergenceDetector:
 
     def is_phase_converged(self, signals: ConvergenceSignals) -> bool:
         if signals.iteration_count >= self._max_iterations:
-            logger.info(
-                "Max-iteration guard triggered at %d", signals.iteration_count
-            )
+            logger.info("Max-iteration guard triggered at %d", signals.iteration_count)
             return True
 
         no_open = signals.open_challenges == 0
@@ -100,9 +91,12 @@ class ConvergenceDetector:
         logger.info(
             "[Convergence] iter=%d open_challenges=%d critic_score=%.1f "
             "(need >= %.1f) -> no_open=%s score_ok=%s",
-            signals.iteration_count, signals.open_challenges,
-            signals.critic_score, self._min_critic_score,
-            no_open, score_ok,
+            signals.iteration_count,
+            signals.open_challenges,
+            signals.critic_score,
+            self._min_critic_score,
+            no_open,
+            score_ok,
         )
 
         return no_open and score_ok

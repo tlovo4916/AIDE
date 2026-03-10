@@ -20,10 +20,12 @@ interface Project {
 }
 
 const PHASE_LABELS: Record<string, string> = {
-  direction: "Direction",
-  hypothesis: "Hypothesis",
+  explore: "Explore",
+  hypothesize: "Hypothesize",
   evidence: "Evidence",
-  synthesis: "Synthesis",
+  compose: "Compose",
+  synthesize: "Synthesize",
+  complete: "Complete",
 };
 
 const STATUS_VARIANT: Record<string, "success" | "warning" | "default"> = {
@@ -52,6 +54,7 @@ export default function DashboardPage() {
   const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState("");
   const [topic, setTopic] = useState("");
+  const [concurrency, setConcurrency] = useState(1);
   const [creating, setCreating] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -79,7 +82,7 @@ export default function DashboardPage() {
     if (!name.trim() || !topic.trim()) return;
     setCreating(true);
     try {
-      const { id } = await createProject({ name: name.trim(), research_topic: topic.trim() });
+      const { id } = await createProject({ name: name.trim(), research_topic: topic.trim(), concurrency });
       router.push(`/projects/${id}`);
     } finally {
       setCreating(false);
@@ -118,6 +121,23 @@ export default function DashboardPage() {
               <div>
                 <label className="mb-1 block text-sm text-aide-text-secondary">Research Topic</label>
                 <Input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Describe what you want to research..." />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm text-aide-text-secondary">
+                  Parallel Lanes ({concurrency})
+                </label>
+                <input
+                  type="range"
+                  min={1}
+                  max={5}
+                  value={concurrency}
+                  onChange={(e) => setConcurrency(Number(e.target.value))}
+                  className="w-full accent-aide-accent-blue"
+                />
+                <div className="mt-1 flex justify-between text-xs text-aide-text-muted">
+                  <span>1 (sequential)</span>
+                  <span>5 (max parallel)</span>
+                </div>
               </div>
             </div>
             <div className="mt-5 flex justify-end gap-2">

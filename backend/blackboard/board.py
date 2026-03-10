@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import aiofiles
 
@@ -32,7 +32,6 @@ _BOARD_DIRS = ("artifacts", "messages", "challenges", "decisions", "index", "scr
 
 
 class Blackboard:
-
     def __init__(
         self,
         project_path: Path,
@@ -62,11 +61,14 @@ class Blackboard:
         for at in ArtifactType:
             (self._root / "artifacts" / at.value).mkdir(parents=True, exist_ok=True)
         if not self._meta_path.exists():
-            await self._write_json(self._meta_path, {
-                "created_at": datetime.utcnow().isoformat(),
-                "phase": "explore",
-                "research_topic": research_topic,
-            })
+            await self._write_json(
+                self._meta_path,
+                {
+                    "created_at": datetime.utcnow().isoformat(),
+                    "phase": "explore",
+                    "research_topic": research_topic,
+                },
+            )
         elif research_topic:
             # Ensure research_topic is persisted even on restart
             meta = await self.get_project_meta()
@@ -102,7 +104,10 @@ class Blackboard:
             except Exception as exc:
                 logger.warning(
                     "Level generation failed for %s/%s v%d: %s",
-                    artifact_type.value, artifact_id, version, exc,
+                    artifact_type.value,
+                    artifact_id,
+                    version,
+                    exc,
                 )
 
     async def write_artifact_level(
@@ -188,9 +193,7 @@ class Blackboard:
             results.append(meta)
         return results
 
-    async def get_latest_version(
-        self, artifact_type: ArtifactType, artifact_id: str
-    ) -> int:
+    async def get_latest_version(self, artifact_type: ArtifactType, artifact_id: str) -> int:
         base = self._artifact_dir(artifact_type, artifact_id)
         if not base.exists():
             return 0
@@ -282,10 +285,7 @@ class Blackboard:
         return results
 
     async def get_open_challenges(self) -> list[ChallengeRecord]:
-        return [
-            c for c in await self.list_challenges()
-            if c.status == ChallengeStatus.OPEN
-        ]
+        return [c for c in await self.list_challenges() if c.status == ChallengeStatus.OPEN]
 
     # ------------------------------------------------------------------
     # Decisions
@@ -343,12 +343,19 @@ class Blackboard:
         # Always show research topic prominently at the top to prevent drift
         if research_topic:
             lines.append(
-                "## ⚠️ RESEARCH TOPIC — ALL WORK MUST STAY ON THIS TOPIC\n"
-                f"{research_topic}\n"
-                "---"
+                f"## ⚠️ RESEARCH TOPIC — ALL WORK MUST STAY ON THIS TOPIC\n{research_topic}\n---"
             )
 
         lines.append(f"Phase: {phase} | Iteration: {iteration}")
+
+        # Include cross-lane context for synthesis phase
+        lane_context = meta.get("lane_context", "")
+        if lane_context:
+            lines.append(
+                "\n## Cross-Lane Research Findings\n"
+                "The following artifacts were produced by independent research lanes:\n"
+                f"{lane_context[:40000]}"
+            )
 
         for at in ArtifactType:
             metas = await self.list_artifacts(at)
@@ -360,7 +367,12 @@ class Blackboard:
                 if ver == 0:
                     continue
                 content = await self.read_artifact(at, m.artifact_id, ver, level)
-                text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)[:600] if content else "(empty)"
+                if isinstance(content, str):
+                    text = content
+                elif content:
+                    text = json.dumps(content, ensure_ascii=False)[:600]
+                else:
+                    text = "(empty)"
                 lines.append(f"  - {m.artifact_id} v{ver}: {text[:500]}")
 
         open_ch = await self.get_open_challenges()
@@ -374,12 +386,11 @@ class Blackboard:
     async def apply_action(self, action: BlackboardAction) -> None:
         if self._action_executor is None:
             from backend.blackboard.actions import ActionExecutor
+
             self._action_executor = ActionExecutor()
         await self._action_executor.execute(action, self)
 
-    async def dedup_check(
-        self, actions: list[BlackboardAction]
-    ) -> list[BlackboardAction]:
+    async def dedup_check(self, actions: list[BlackboardAction]) -> list[BlackboardAction]:
         """Pass through all actions (dedup requires embedding service, skip when unavailable)."""
         return actions
 
@@ -401,7 +412,9 @@ class Blackboard:
             if isinstance(score, (int, float)):
                 return float(score)
         # Fall back to L2 raw content (critic writes {"score": N, ...})
-        l2_raw = await self.read_artifact(ArtifactType.REVIEW, latest.artifact_id, ver, ContextLevel.L2)
+        l2_raw = await self.read_artifact(
+            ArtifactType.REVIEW, latest.artifact_id, ver, ContextLevel.L2
+        )
         if isinstance(l2_raw, str):
             try:
                 data = json.loads(l2_raw)
@@ -477,7 +490,9 @@ class Blackboard:
     async def has_logic_gaps(self) -> bool:
         challenges = await self.list_challenges()
         for ch in challenges:
-            if ch.status == ChallengeStatus.OPEN and ("gap" in ch.argument.lower() or "logic" in ch.argument.lower()):
+            if ch.status == ChallengeStatus.OPEN and (
+                "gap" in ch.argument.lower() or "logic" in ch.argument.lower()
+            ):
                 return True
         return False
 
@@ -508,36 +523,56 @@ class Blackboard:
 
     async def export_paper(self) -> Path | None:
         """Collect ALL non-superseded DRAFT artifacts, order by section,
-        and write a combined paper to exports/paper.md."""
-        metas = await self.list_artifacts(ArtifactType.DRAFT)
-        if not metas:
-            logger.info("export_paper: no DRAFT artifacts found")
-            return None
+        and write a combined paper to exports/paper.md.
 
-        _SECTION_ORDER = [
-            "title", "abstract", "摘要", "标题",
-            "introduction", "引言",
-            "background", "背景",
-            "method", "方法",
-            "result", "结果",
-            "discussion", "讨论",
-            "conclusion", "结论",
-            "reference", "参考",
+        If DRAFT artifacts are sparse, supplement with HYPOTHESES and
+        EVIDENCE_FINDINGS to produce a more complete export.
+        """
+        metas = await self.list_artifacts(ArtifactType.DRAFT)
+
+        section_order = [
+            "title",
+            "abstract",
+            "摘要",
+            "标题",
+            "introduction",
+            "引言",
+            "background",
+            "背景",
+            "hypothesis",
+            "假设",
+            "method",
+            "方法",
+            "evidence",
+            "证据",
+            "result",
+            "结果",
+            "discussion",
+            "讨论",
+            "conclusion",
+            "结论",
+            "reference",
+            "参考",
         ]
 
         def _section_sort_key(section_name: str) -> int:
             lower = section_name.lower()
-            for i, keyword in enumerate(_SECTION_ORDER):
+            for i, keyword in enumerate(section_order):
                 if keyword in lower:
                     return i
-            return len(_SECTION_ORDER)
+            return len(section_order)
 
         seen_sections: dict[str, str] = {}
         for m in metas:
             ver = await self.get_latest_version(ArtifactType.DRAFT, m.artifact_id)
             if ver == 0:
                 continue
-            raw = await self.read_artifact(ArtifactType.DRAFT, m.artifact_id, ver, ContextLevel.L2)
+            raw = await self.read_artifact(
+                ArtifactType.DRAFT,
+                m.artifact_id,
+                ver,
+                ContextLevel.L2,
+            )
             if not raw:
                 continue
             text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
@@ -552,11 +587,47 @@ class Blackboard:
             section_key = section_name or m.artifact_id
             seen_sections[section_key] = text
 
+        # Supplement with other artifact types if drafts are sparse
+        supplement_types = [
+            (ArtifactType.HYPOTHESES, "hypotheses"),
+            (ArtifactType.EVIDENCE_FINDINGS, "evidence"),
+            (ArtifactType.DIRECTIONS, "directions"),
+            (ArtifactType.OUTLINE, "outline"),
+        ]
+        for art_type, label in supplement_types:
+            art_metas = await self.list_artifacts(art_type)
+            for m in art_metas:
+                ver = await self.get_latest_version(art_type, m.artifact_id)
+                if ver == 0:
+                    continue
+                raw = await self.read_artifact(
+                    art_type,
+                    m.artifact_id,
+                    ver,
+                    ContextLevel.L2,
+                )
+                if not raw:
+                    continue
+                text = (
+                    raw
+                    if isinstance(raw, str)
+                    else json.dumps(
+                        raw,
+                        ensure_ascii=False,
+                    )
+                )
+                section_key = f"{label}_{m.artifact_id}"
+                if section_key not in seen_sections:
+                    seen_sections[section_key] = text
+
         if not seen_sections:
-            logger.info("export_paper: all DRAFT artifacts are empty")
+            logger.info("export_paper: no artifacts found for export")
             return None
 
-        sorted_sections = sorted(seen_sections.items(), key=lambda kv: _section_sort_key(kv[0]))
+        sorted_sections = sorted(
+            seen_sections.items(),
+            key=lambda kv: _section_sort_key(kv[0]),
+        )
         combined = "\n\n---\n\n".join(text for _, text in sorted_sections)
 
         exports_dir = self._root / "exports"
@@ -564,7 +635,9 @@ class Blackboard:
         paper_path = exports_dir / "paper.md"
         await self._write_text(paper_path, combined)
         logger.info(
-            "export_paper: written %d sections to %s", len(sorted_sections), paper_path
+            "export_paper: written %d sections to %s",
+            len(sorted_sections),
+            paper_path,
         )
         return paper_path
 
@@ -587,7 +660,7 @@ class Blackboard:
         if not path.exists():
             return None
         try:
-            async with aiofiles.open(path, "r", encoding="utf-8") as f:
+            async with aiofiles.open(path, encoding="utf-8") as f:
                 return json.loads(await f.read())
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Failed to read %s: %s", path, exc)
@@ -602,7 +675,7 @@ class Blackboard:
         if not path.exists():
             return None
         try:
-            async with aiofiles.open(path, "r", encoding="utf-8") as f:
+            async with aiofiles.open(path, encoding="utf-8") as f:
                 return await f.read()
         except OSError as exc:
             logger.warning("Failed to read %s: %s", path, exc)

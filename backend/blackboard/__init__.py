@@ -1,5 +1,5 @@
-from backend.blackboard.active_tracker import ActiveTracker
 from backend.blackboard.actions import ActionExecutor
+from backend.blackboard.active_tracker import ActiveTracker
 from backend.blackboard.board import Blackboard
 from backend.blackboard.challenge import ChallengeManager
 from backend.blackboard.compressor import DedupCheckResult, DedupCompressor

@@ -16,6 +16,8 @@ _OVERRIDES_FIELDS = [
     "deepseek_api_key",
     "openrouter_api_key",
     "openai_api_key",
+    "anthropic_api_key",
+    "anthropic_base_url",
     "semantic_scholar_api_key",
     "default_model",
     "orchestrator_model",
@@ -63,6 +65,8 @@ class LLMSettings(BaseModel):
     deepseek_api_key: str | None = None
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    anthropic_base_url: str = "https://api.anthropic.com"
     default_model: str = "deepseek-reasoner"
     orchestrator_model: str = "deepseek-chat"
     embedding_model: str = "text-embedding-3-small"
@@ -71,10 +75,11 @@ class LLMSettings(BaseModel):
     semantic_scholar_api_key: str | None = None
     agent_model_overrides: dict[str, str] = {
         "director": "deepseek-reasoner",
-        "scientist": "deepseek-chat",
+        "scientist": "deepseek-reasoner",
+        "critic": "deepseek-reasoner",
         "librarian": "deepseek-chat",
         "writer": "deepseek-chat",
-        "critic": "deepseek-chat",
+        "synthesizer": "deepseek-reasoner",
     }
 
 
@@ -92,6 +97,8 @@ async def get_settings() -> LLMSettings:
         deepseek_api_key=_mask(settings.deepseek_api_key),
         openrouter_api_key=_mask(settings.openrouter_api_key),
         openai_api_key=_mask(settings.openai_api_key),
+        anthropic_api_key=_mask(settings.anthropic_api_key),
+        anthropic_base_url=settings.anthropic_base_url,
         default_model=settings.default_model,
         orchestrator_model=settings.orchestrator_model,
         embedding_model=settings.embedding_model,
@@ -112,6 +119,10 @@ async def update_settings(body: LLMSettings) -> LLMSettings:
         settings.openai_api_key = body.openai_api_key
     if body.semantic_scholar_api_key and "****" not in body.semantic_scholar_api_key:
         settings.semantic_scholar_api_key = body.semantic_scholar_api_key
+    if body.anthropic_api_key and "****" not in body.anthropic_api_key:
+        settings.anthropic_api_key = body.anthropic_api_key
+    if body.anthropic_base_url:
+        settings.anthropic_base_url = body.anthropic_base_url
 
     settings.default_model = body.default_model
     settings.orchestrator_model = body.orchestrator_model

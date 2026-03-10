@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from pathlib import Path
@@ -11,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
-from backend.models import get_session, Project
+from backend.models import Project, get_session
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +37,7 @@ def _papers_dir(project_id: uuid.UUID) -> Path:
 
 def _get_bm25_store(project_id: uuid.UUID):
     from backend.knowledge.bm25_store import BM25Store
+
     store = BM25Store(persist_path=str(settings.project_path(str(project_id)) / "bm25_index.json"))
     store.load()
     return store
@@ -45,6 +45,7 @@ def _get_bm25_store(project_id: uuid.UUID):
 
 def _get_vector_store(project_id: uuid.UUID):
     from backend.knowledge.vector_store import VectorStore
+
     collection_name = f"aide_{str(project_id).replace('-', '_')}"
     store = VectorStore(collection_name=collection_name)
     return store
@@ -53,16 +54,17 @@ def _get_vector_store(project_id: uuid.UUID):
 async def _process_pdf(pdf_path: Path, paper_id: str, project_id: uuid.UUID) -> None:
     """Background task: extract text, chunk, embed, index."""
     try:
-        from backend.knowledge.pdf_processor import PDFProcessor
         from backend.knowledge.embeddings import EmbeddingService
+        from backend.knowledge.pdf_processor import PDFProcessor
         from backend.llm.router import LLMRouter
 
         llm_router = LLMRouter()
 
         async def summarizer(style: str, prompt: str) -> str:
             return await llm_router.generate(
-                settings.summarizer_model, prompt,
-                system_prompt="You are a concise summarizer. Output only the summary."
+                settings.summarizer_model,
+                prompt,
+                system_prompt="You are a concise summarizer. Output only the summary.",
             )
 
         processor = PDFProcessor(summarizer=summarizer)
@@ -78,8 +80,7 @@ async def _process_pdf(pdf_path: Path, paper_id: str, project_id: uuid.UUID) -> 
         chunk_ids = [c.chunk_id for c in chunks]
         chunk_texts = [c.content for c in chunks]
         chunk_metadatas = [
-            {**c.metadata, "source_file": paper_id, "paper_id": paper_id}
-            for c in chunks
+            {**c.metadata, "source_file": paper_id, "paper_id": paper_id} for c in chunks
         ]
 
         embedding_service = EmbeddingService()
@@ -204,8 +205,8 @@ async def search_papers(
     if not project:
         raise HTTPException(404, "Project not found")
 
-    from backend.knowledge.hybrid_search import HybridSearchEngine
     from backend.knowledge.embeddings import EmbeddingService
+    from backend.knowledge.hybrid_search import HybridSearchEngine
 
     vector_store = _get_vector_store(project_id)
     bm25_store = _get_bm25_store(project_id)

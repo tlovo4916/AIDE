@@ -7,7 +7,6 @@ from backend.types import AgentRole, ArtifactType
 
 
 class CriticAgent(BaseAgent):
-
     role = AgentRole.CRITIC
     system_prompt_template = "critic.j2"
     preferred_model = "deepseek-reasoner"

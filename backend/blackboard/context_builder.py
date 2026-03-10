@@ -49,12 +49,15 @@ async def build_budget_context(
             if level != ContextLevel.L2:
                 logger.info(
                     "[ContextBuilder] Using %s (%d tokens, budget=%d)",
-                    level.value, token_count, budget,
+                    level.value,
+                    token_count,
+                    budget,
                 )
             return summary
         logger.debug(
             "[ContextBuilder] %s too large (%d tokens), trying lower level",
-            level.value, token_count,
+            level.value,
+            token_count,
         )
 
     # All levels exceed budget — hard truncate L0 (approx 4 chars/token)
