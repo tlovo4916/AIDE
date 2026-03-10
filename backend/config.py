@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     convergence_min_critic_score: float = 6.0
     convergence_stable_rounds: int = 3
     heartbeat_interval_seconds: int = 60
+    heartbeat_stale_threshold_seconds: int = 360
 
     # -- Checkpoint --
     checkpoint_timeout_minutes: int = 30
@@ -83,7 +84,11 @@ class Settings(BaseSettings):
 
     # -- Web retrieval --
     semantic_scholar_api_key: Optional[str] = None
-    enable_web_retrieval: bool = False
+    enable_web_retrieval: bool = True
+
+    # -- Trend extraction --
+    enable_trend_extraction: bool = True
+    trend_extraction_interval: int = 2
 
     @property
     def projects_dir(self) -> Path:

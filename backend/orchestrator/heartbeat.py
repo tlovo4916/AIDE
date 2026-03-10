@@ -27,6 +27,7 @@ class HeartbeatMonitor:
 
     def __init__(self, interval: int | None = None) -> None:
         self._interval = interval or settings.heartbeat_interval_seconds
+        self._stale_threshold = settings.heartbeat_stale_threshold_seconds
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._last_activity: dict[str, datetime] = {}
         self._agent_statuses: dict[str, str] = {}
@@ -154,7 +155,7 @@ class HeartbeatMonitor:
         last = self._last_activity.get(project_id)
         if last:
             elapsed = (datetime.utcnow() - last).total_seconds()
-            if elapsed > self._interval * 3:
+            if elapsed > self._stale_threshold:
                 logger.warning(
                     "Stale state for %s: no activity for %.0fs",
                     project_id,

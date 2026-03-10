@@ -238,6 +238,22 @@ class Blackboard:
     # Challenges
     # ------------------------------------------------------------------
 
+    async def resolve_challenge(
+        self,
+        challenge_id: str,
+        resolution: str,
+        status: ChallengeStatus = ChallengeStatus.DISMISSED,
+    ) -> None:
+        """Dismiss or resolve an open challenge by ID."""
+        existing = await self.read_challenge(challenge_id)
+        if existing is None:
+            logger.warning("resolve_challenge: challenge %s not found", challenge_id)
+            return
+        existing.status = status
+        existing.response = resolution
+        existing.resolved_at = datetime.utcnow()
+        await self.write_challenge(existing)
+
     async def write_challenge(self, challenge: ChallengeRecord) -> None:
         ch_dir = self._root / "challenges"
         ch_dir.mkdir(parents=True, exist_ok=True)
@@ -489,6 +505,68 @@ class Blackboard:
             "decisions": decisions,
             "messages": messages,
         }
+
+    async def export_paper(self) -> Path | None:
+        """Collect ALL non-superseded DRAFT artifacts, order by section,
+        and write a combined paper to exports/paper.md."""
+        metas = await self.list_artifacts(ArtifactType.DRAFT)
+        if not metas:
+            logger.info("export_paper: no DRAFT artifacts found")
+            return None
+
+        _SECTION_ORDER = [
+            "title", "abstract", "摘要", "标题",
+            "introduction", "引言",
+            "background", "背景",
+            "method", "方法",
+            "result", "结果",
+            "discussion", "讨论",
+            "conclusion", "结论",
+            "reference", "参考",
+        ]
+
+        def _section_sort_key(section_name: str) -> int:
+            lower = section_name.lower()
+            for i, keyword in enumerate(_SECTION_ORDER):
+                if keyword in lower:
+                    return i
+            return len(_SECTION_ORDER)
+
+        seen_sections: dict[str, str] = {}
+        for m in metas:
+            ver = await self.get_latest_version(ArtifactType.DRAFT, m.artifact_id)
+            if ver == 0:
+                continue
+            raw = await self.read_artifact(ArtifactType.DRAFT, m.artifact_id, ver, ContextLevel.L2)
+            if not raw:
+                continue
+            text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+            section_name = ""
+            try:
+                parsed = json.loads(text) if isinstance(text, str) else text
+                if isinstance(parsed, dict):
+                    section_name = parsed.get("section", "")
+                    text = parsed.get("text", text)
+            except (json.JSONDecodeError, TypeError):
+                pass
+            section_key = section_name or m.artifact_id
+            seen_sections[section_key] = text
+
+        if not seen_sections:
+            logger.info("export_paper: all DRAFT artifacts are empty")
+            return None
+
+        sorted_sections = sorted(seen_sections.items(), key=lambda kv: _section_sort_key(kv[0]))
+        combined = "\n\n---\n\n".join(text for _, text in sorted_sections)
+
+        exports_dir = self._root / "exports"
+        exports_dir.mkdir(parents=True, exist_ok=True)
+        paper_path = exports_dir / "paper.md"
+        await self._write_text(paper_path, combined)
+        logger.info(
+            "export_paper: written %d sections to %s", len(sorted_sections), paper_path
+        )
+        return paper_path
 
     def get_project_path(self) -> Path:
         return self._root

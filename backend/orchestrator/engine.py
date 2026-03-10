@@ -10,6 +10,7 @@ from typing import Any, Callable, Coroutine, Protocol
 
 from backend.agents.base import BaseAgent
 from backend.agents.subagent import SubAgentPool
+from backend.knowledge.trend_extractor import TrendExtractor
 from backend.orchestrator.backtrack import BacktrackController
 from backend.orchestrator.convergence import ConvergenceDetector
 from backend.orchestrator.heartbeat import HeartbeatMonitor
@@ -25,6 +26,9 @@ from backend.types import (
     OrchestratorDecision,
     ResearchPhase,
 )
+
+# Auto-dismiss challenges that have been open longer than this many phase iterations
+_CHALLENGE_AUTO_DISMISS_AFTER = 2
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +66,8 @@ class Board(Protocol):
     async def has_direction_issues(self) -> bool: ...
     async def serialize(self) -> dict[str, Any]: ...
     def get_project_path(self) -> Path: ...
+    async def resolve_challenge(self, challenge_id: str, resolution: str) -> None: ...
+    async def export_paper(self) -> Any: ...
 
 
 class CheckpointManager(Protocol):
@@ -114,6 +120,7 @@ class OrchestrationEngine:
         heartbeat: HeartbeatMonitor,
         ws_broadcast: WSBroadcast,
         on_phase_change: PhaseChangeCallback | None = None,
+        trend_extractor: TrendExtractor | None = None,
     ) -> None:
         self._project_id = project_id
         self._board = board
@@ -126,6 +133,7 @@ class OrchestrationEngine:
         self._ws_broadcast = ws_broadcast
         self._on_phase_change = on_phase_change
         self._subagent_pool: SubAgentPool | None = None
+        self._trend_extractor = trend_extractor
 
         self._running = False
         self._phase = ResearchPhase.EXPLORE
@@ -282,13 +290,18 @@ class OrchestrationEngine:
                             "action": "created",
                             "data": action.content,
                         })
-                        # Capture critic score per phase so convergence is phase-scoped
-                        art_type = action.content.get("artifact_type", action.target)
-                        if art_type == "review":
-                            score = action.content.get("score")
-                            if isinstance(score, (int, float)):
+                        # Use agent_role instead of artifact_type string to
+                        # reliably detect critic reviews (LLM often omits or
+                        # mangles the artifact_type field).
+                        if action.agent_role == AgentRole.CRITIC:
+                            score = self._extract_critic_score(action.content)
+                            if score is not None:
                                 await self._board.set_phase_critic_score(
-                                    self._phase, float(score)
+                                    self._phase, score
+                                )
+                                logger.info(
+                                    "[Engine] Phase %s critic score updated to %.1f",
+                                    self._phase.value, score,
                                 )
 
                 await self._ws_broadcast(
@@ -306,6 +319,9 @@ class OrchestrationEngine:
                 )
                 for upd in artifact_updates:
                     await self._ws_broadcast("ArtifactUpdated", upd)
+
+                # 7b. Trend extraction
+                await self._maybe_extract_trends()
 
                 # 8. Handle challenges
                 await self._handle_challenges(self._board)
@@ -354,6 +370,10 @@ class OrchestrationEngine:
         finally:
             await self._heartbeat.stop(self._project_id)
             self._running = False
+
+        # Normal completion: export paper and notify frontend
+        if self._phase == ResearchPhase.COMPLETE:
+            await self._on_research_complete()
 
     def stop(self) -> None:
         self._running = False
@@ -415,6 +435,36 @@ class OrchestrationEngine:
         return response.actions
 
     # ------------------------------------------------------------------
+    # Research completion
+    # ------------------------------------------------------------------
+
+    async def _on_research_complete(self) -> None:
+        """Clean up open challenges, export paper, and notify frontend."""
+        try:
+            remaining = await self._board.get_open_challenges()
+            for ch in remaining:
+                await self._board.resolve_challenge(
+                    ch.challenge_id,
+                    "Auto-dismissed: research completed.",
+                )
+                logger.info(
+                    "[Engine] Dismissed leftover challenge %s on completion",
+                    ch.challenge_id,
+                )
+
+            paper_path = await self._board.export_paper()
+            await self._ws_broadcast(
+                "ResearchCompleted",
+                {
+                    "phase": ResearchPhase.COMPLETE.value,
+                    "paper_path": str(paper_path) if paper_path else None,
+                },
+            )
+            logger.info("[Engine] Research completed. Paper at %s", paper_path)
+        except Exception:
+            logger.exception("[Engine] Error during research completion export")
+
+    # ------------------------------------------------------------------
     # Challenge handling
     # ------------------------------------------------------------------
 
@@ -422,6 +472,8 @@ class OrchestrationEngine:
         challenges = await board.get_open_challenges()
         if not challenges:
             return False
+
+        phase_iters = await board.get_phase_iteration_count(self._phase)
 
         for ch in challenges:
             await self._ws_broadcast(
@@ -433,7 +485,81 @@ class OrchestrationEngine:
                     "message": ch.argument,
                 },
             )
+            # Auto-dismiss challenges that agents have not responded to after
+            # _CHALLENGE_AUTO_DISMISS_AFTER iterations — prevents permanent
+            # convergence deadlock.
+            if phase_iters > _CHALLENGE_AUTO_DISMISS_AFTER:
+                logger.info(
+                    "[Engine] Auto-dismissing challenge %s after %d iterations",
+                    ch.challenge_id, phase_iters,
+                )
+                await board.resolve_challenge(
+                    ch.challenge_id,
+                    f"Auto-dismissed: no agent response after {phase_iters} iterations.",
+                )
+                await self._ws_broadcast(
+                    "ChallengeResolved",
+                    {
+                        "id": ch.challenge_id,
+                        "resolution": "auto-dismissed",
+                    },
+                )
         return True
+
+    # ------------------------------------------------------------------
+    # Trend extraction
+    # ------------------------------------------------------------------
+
+    async def _maybe_extract_trends(self) -> None:
+        """Extract trend signals every N iterations during EXPLORE/EVIDENCE phases."""
+        from backend.config import settings as cfg
+        from backend.types import ArtifactType as AT
+
+        if not self._trend_extractor or not cfg.enable_trend_extraction:
+            return
+        if self._phase not in (ResearchPhase.EXPLORE, ResearchPhase.EVIDENCE):
+            return
+        if self._iteration % cfg.trend_extraction_interval != 0:
+            return
+
+        logger.info("[Engine] Running trend extraction at iteration %d", self._iteration)
+        try:
+            result = await self._trend_extractor.process_evidence_artifacts(self._board)
+            if not result:
+                return
+
+            import json
+            action = BlackboardAction(
+                agent_role=AgentRole.SCIENTIST,
+                action_type=ActionType.WRITE_ARTIFACT,
+                target="trend_signals",
+                content={
+                    "artifact_type": AT.TREND_SIGNALS.value,
+                    "text": json.dumps(result, ensure_ascii=False),
+                    "trends": result.get("trends", []),
+                    "entities": result.get("entities", []),
+                    "summary": result.get("summary", ""),
+                },
+                rationale="Automated trend signal extraction from evidence",
+                context_level=ContextLevel.L1,
+            )
+            await self._board.apply_action(action)
+            await self._ws_broadcast(
+                "ArtifactUpdated",
+                {
+                    "artifact_type": AT.TREND_SIGNALS.value,
+                    "artifact_id": f"trends-iter-{self._iteration}",
+                    "action": "created",
+                    "data": result,
+                },
+            )
+            logger.info(
+                "[Engine] Trend signals extracted: %d trends, %d entities",
+                len(result.get("trends", [])),
+                len(result.get("entities", [])),
+            )
+        except Exception:
+            logger.exception("[Engine] Trend extraction failed")
 
     # ------------------------------------------------------------------
     # Phase management
@@ -499,5 +625,45 @@ class OrchestrationEngine:
             )
 
     @staticmethod
+    def _extract_critic_score(content: dict[str, Any]) -> float | None:
+        """Extract numeric score from review action content.
+
+        Handles multiple structures the LLM may produce:
+          1. {"score": 8, ...}  -- top-level
+          2. {"content": '{"score": 8, ...}', ...}  -- nested JSON string
+          3. {"content_l2": '{"score": 8, ...}', ...}
+          4. {"text": '{"score": 8, ...}'}  -- wrapped by _parse_response
+        """
+        import json as _json
+
+        for key in ("score", "overall_score"):
+            val = content.get(key)
+            if isinstance(val, (int, float)):
+                return float(val)
+
+        for field in ("content", "content_l2", "text"):
+            raw = content.get(field)
+            if isinstance(raw, dict):
+                # Nested dict (not JSON string) — scan directly
+                for key in ("score", "overall_score"):
+                    val = raw.get(key)
+                    if isinstance(val, (int, float)):
+                        return float(val)
+                continue
+            if not isinstance(raw, str):
+                continue
+            try:
+                parsed = _json.loads(raw)
+                if isinstance(parsed, dict):
+                    for key in ("score", "overall_score"):
+                        val = parsed.get(key)
+                        if isinstance(val, (int, float)):
+                            return float(val)
+            except (ValueError, TypeError):
+                continue
+        return None
+
+    @staticmethod
     async def _build_state_summary(board: Board) -> str:
-        return await board.get_state_summary(ContextLevel.L2)
+        from backend.blackboard.context_builder import build_budget_context
+        return await build_budget_context(board)

@@ -1,6 +1,6 @@
 # AIDE — 开发进度 WIP
 
-> 最后更新：2026-03-02
+> 最后更新：2026-03-11（Session 6）
 
 ---
 
@@ -8,14 +8,14 @@
 
 | 阶段 | 规划内容 | 完成度 | 状态 |
 |------|----------|--------|------|
-| Phase 1：基础架构 | Docker、FastAPI、DB、Blackboard、WS | ~85% | ✅ 基本完成 |
-| Phase 2：多智能体核心 | 5 Agent + Orchestrator 主循环 | ~70% | 🔧 核心跑通，缺关键智能 |
-| Phase 3：高级研究能力 | 语义检索、真实 RAG、论文导出 | ~20% | ⚠️ 大部分未实现 |
+| Phase 1：基础架构 | Docker、FastAPI、DB、Blackboard、WS | ~90% | ✅ 基本完成 |
+| Phase 2：多智能体核心 | 5 Agent + Orchestrator 主循环 | **~95%** | ✅ 核心流程稳定，质量链路已打通 |
+| Phase 3：高级研究能力 | 语义检索、真实 RAG、论文导出 | ~50% | 🔧 arXiv+S2 接入，BM25 fallback，PDF RAG 部分打通 |
 | Phase 4：产品打磨 | 智能推荐、实验追踪、协作 | ~5% | ❌ 几乎未开始 |
 
 ---
 
-## Phase 1：基础架构（~85%）
+## Phase 1：基础架构（~90%）
 
 ### ✅ 已完成
 - Docker Compose 4 服务（backend、frontend、postgres、chromadb）
@@ -26,56 +26,61 @@
 - REST API：项目 CRUD、论文管理、检查点、设置
 - Next.js 15 + Tailwind CSS 4 前端基础框架
 - 项目创建/列表/详情页
-- L0/L1/L2 上下文分级架构（数据结构已定义）
+- L0/L1/L2 上下文分级架构（数据结构 + LLM 生成逻辑已完整）
 - 设置持久化（`workspace/settings_overrides.json`）
+- **ContextBuilder**（`context_builder.py`）：L2→L1→L0 自动降级到 30K token 预算内
 
 ### ❌ 未完成
-- L0/L1/L2 `ContextBuilder` 的实际按 token 预算裁剪逻辑（当前所有 agent 获得完整 L2 dump）
 - 前端错误边界 / 全局错误处理 UI
 
 ---
 
-## Phase 2：多智能体核心（~70%）
+## Phase 2：多智能体核心（~95%）
 
 ### ✅ 已完成
 - 5 个 Agent：Director、Scientist、Librarian、Writer、Critic（Jinja2 模板驱动）
 - OrchestrationEngine 主循环（plan → dispatch → validate → convergence → loop）
-- OrchestratorPlanner（LLM 驱动的 next-action 选择）
-- ConvergenceDetector（Critic 评分阈值 + stable rounds）
+- OrchestratorPlanner（纯规则轮转，稳定不崩溃）
+- ConvergenceDetector（per-phase Critic 评分阈值 + max-iteration 保护）
 - BacktrackController（矛盾时回退阶段）
-- HeartbeatMonitor（崩溃恢复）
-- CheckpointManager（关键节点暂停等待用户审批）
+- HeartbeatMonitor（崩溃恢复，stale 阈值可配置 360s）
+- CheckpointManager（关键节点暂停等待用户审批，WS + REST 双路响应）
 - SubAgentPool（并行子任务分发）
-- WriteBackGuard（防止 agent 写入越权 artifact）
+- WriteBackGuard（markdown fence 剥离 + 输入截断降噪）
 - LLM Router（DeepSeek + OpenRouter 双 provider + fallback）
 - TokenUsage 跟踪（`tracker.py`）
-- **研究主题注入修复**：6 层注入链（DB→Board→Planner→BaseAgent→Jinja2→Engine per-iter 检查）
-- **主题漂移检测**：`_check_on_topic()` + `TopicDriftWarning` WS 事件
-- **前端运行状态指示器**：ping 动画横幅、iteration 计数、当前 agent 状态、漂移警告 Toast
+- 研究主题 6 层注入链（DB→Board→Planner→BaseAgent→Jinja2→Engine per-iter 检查）
+- 主题漂移检测：`_check_on_topic()` + `TopicDriftWarning` WS 事件
+- 前端运行状态指示器（ping 动画、iteration 计数、当前 agent、漂移 Toast）
+- Challenge 自动 dismiss（`phase_iters > 2` 时自动解决）
+- Phase COMPLETE 论文导出（`_on_research_complete()` → `exports/paper.md` + `ResearchCompleted` WS）
+- **Critic 分数提取链路**（Session 6 修复）：用 `agent_role == CRITIC` 替代不可靠的 artifact_type 字符串匹配
+- **L1 JSON 生成加固**（Session 6）：markdown fence 剥离 + 强化 system prompt
+- **SPAWN_SUBAGENT handler**（Session 6）：actions.py 补上处理器，消除 "Unhandled action type" 警告
 
 ### ❌ 未完成
-- **LLM Planner 降级**：`plan_next_action()` 在 LLM 解析失败时直接抛异常，缺乏 rule-based fallback
-- **LLM Dedup**：`dedup_check()` 目前是简单字符串哈希比较，非语义去重
-- **Challenge 解决机制**：`ChallengeRaised` 事件广播了，但 orchestrator 没有自动解决 challenge 的逻辑（只广播不处理）
-- **Agent 输出结构化验证**：仅靠 JSON parse，无 Pydantic schema 强校验
-- **Phase COMPLETE 的后处理**：研究完成后没有触发论文导出/存储流程
+- **LLM 语义 Dedup**：`dedup_check()` 目前是直通（pass-through），非语义去重
+- **Agent 输出 Pydantic schema 强校验**：仅靠 JSON parse
+- **前端 ResearchCompleted 处理**：WS 事件已定义，前端未订阅/显示完成状态
 
 ---
 
-## Phase 3：高级研究能力（~20%）
+## Phase 3：高级研究能力（~50%）
 
 ### ✅ 已完成
-- ChromaDB 集成（服务已运行，基础 client 存在）
-- Librarian agent 模板（定义了搜索行为）
+- ChromaDB + BM25 集成（服务运行，hybrid search 已实现）
+- PDF 上传 → 解析（PyMuPDF/pdfplumber）→ 分块 → 嵌入（text-embedding-3-small）→ ChromaDB + BM25 入库（完整流水线）
+- Librarian 真实 arXiv + Semantic Scholar 检索：`WebRetriever` 双源 fallback
+- S2 限流处理（`_MAX_RETRIES=3`，动态 `Retry-After` backoff，query 去重缓存）
+- **Librarian 本地知识检索**（Session 6）：Hybrid search → BM25 fallback（SSL 失败时 graceful 降级）
+- 论文导出到 `exports/paper.md`（研究完成时自动触发）
 
 ### ❌ 未完成
-- **真实语义检索**：Librarian 目前调用 LLM 生成"假"检索结果，没有真正查询 ChromaDB 或外部 API
-- **arXiv / Semantic Scholar API 集成**：`papers.py` 存在 REST 端点但无实际爬取逻辑
-- **PDF 解析 + 向量化**：无论文全文提取和入库
-- **混合检索（BM25 + 向量）**：计划中，未实现
-- **引用图谱构建**：未实现
-- **论文导出（PDF/LaTeX）**：`papers.py` 有草稿，无渲染引擎
-- **前端论文编辑器**：未实现
+- **BM25 fallback 只返回 doc_id 不返回 content**：`BM25Store.query()` 不返回文本，需改进
+- **arXiv 检索结果未入 ChromaDB**：检索到的论文没有持久化到向量库
+- **论文导出（PDF/LaTeX）**：目前只有 Markdown，无渲染引擎
+- **前端论文编辑器 / 下载**：未实现
+- **引用图谱构建**：`citation_graph.py` 存在但未集成
 
 ---
 
@@ -89,7 +94,6 @@
 - 实验追踪与可视化（假设演化树、证据网络图）
 - 多用户协作
 - 研究模板库
-- 一键导出完整研究报告
 
 ---
 
@@ -97,33 +101,59 @@
 
 | Session | 修复内容 |
 |---------|----------|
-| Session 2 | `tracker.py` ORM 双重定义冲突、`async_sessionmaker` 误用 `await`、列名错误（model→model_name, cost→cost_usd） |
-| Session 2 | `factory.py` CheckpointManager 注册表；`ws.py` checkpoint 响应用错实例；`checkpoints.py` REST 路由实现 `apply_user_response()` |
-| Session 3 | 设置持久化：`.env` 宿主机问题，改为写 `/app/workspace/settings_overrides.json`，lifespan 恢复 |
-| Session 4 | 研究主题 6 层注入链修复（核心缺陷：topic 从未传给任何 agent） |
-| Session 4 | 前端无运行状态指示器；添加 ping 动画横幅、iteration 计数、TopicDriftWarning Toast |
+| Session 2 | `tracker.py` ORM 双重定义冲突、`async_sessionmaker` 误用 `await`、列名错误 |
+| Session 2 | `factory.py` CheckpointManager 注册表；`ws.py` checkpoint 响应用正确实例；`checkpoints.py` REST 实现 |
+| Session 3 | 设置持久化：改为写 `/app/workspace/settings_overrides.json`，lifespan 恢复 |
+| Session 4 | 研究主题 6 层注入链修复（topic 从未传给任何 agent） |
+| Session 4 | 前端运行状态指示器（ping、iteration、TopicDriftWarning Toast） |
+| Session 5 | Challenge 自动 dismiss（>2 iters 自动解决，解除收敛阻塞） |
+| Session 5 | Phase COMPLETE 论文导出（`exports/paper.md` + `ResearchCompleted` WS） |
+| Session 5 | Librarian 接入真实 arXiv API（5 篇论文注入 context） |
+| Session 5 | ContextBuilder token 预算（L2→L1→L0 自动降级） |
+| **Session 6** | **Critic 分数链路修复**：`agent_role == CRITIC` 替代 artifact_type 字符串匹配（**P0，修复前分数始终 0.0**） |
+| **Session 6** | **L1 JSON 生成加固**：markdown fence 剥离 + 强化 prompt |
+| **Session 6** | **critic.j2 输出格式明确 artifact_type: review** |
+| **Session 6** | **WriteBackGuard 降噪**：fence 剥离 + 输入截断 3000 字符 |
+| **Session 6** | **Librarian 本地知识检索 SSL fallback**：Hybrid→BM25 graceful 降级 + 修复 `search()→query()` 方法名 |
+| **Session 6** | **S2 限流优化**：重试 3 次 + Retry-After header + query 去重缓存 |
+| **Session 6** | **SPAWN_SUBAGENT handler**：消除 "Unhandled action type" 警告 |
+| **Session 6** | **Heartbeat stale 阈值**：180s→360s 可配置，消除 agent 执行期间误报 |
 
 ---
 
-## 优先级待办（Next Steps）
+## 性能基线（Session 6 实测 2026-03-11）
 
-### P0 — 阻塞核心功能
-- [ ] LLM Planner fallback：解析失败时降级到 rule-based 策略，防止主循环崩溃
-- [ ] Challenge 自动解决：orchestrator 在下次迭代让 Critic/Director 处理未解决的 challenge
-- [ ] Phase COMPLETE 触发论文存储/导出
+完整研究流程（英文课题，deepseek-chat + deepseek-reasoner 混合）：
+- **总耗时 33 分 51 秒**，14 轮迭代
+- **所有阶段通过 Critic 质量评判收敛推进**（7.0-8.0 分），不再依赖 max_iterations 超时
+- 估算费用 ~$1.0-1.5（¥7-11）
 
-### P1 — 让研究真正有用
-- [ ] Librarian 真实检索：接入 arXiv API 或 Semantic Scholar，结果入 ChromaDB
-- [ ] PDF 解析 + 向量化入库（基础 RAG 闭环）
-- [ ] L1/L2 ContextBuilder 按 token 预算裁剪（防止大项目 context 爆炸）
+| 阶段 | 迭代数 | 耗时 | Critic 分数 |
+|------|--------|------|------------|
+| EXPLORE | 4 轮 | 10m39s | 7.0 |
+| HYPOTHESIZE | 4 轮 | 8m36s | 7.0→8.0→6.0 |
+| EVIDENCE | 4 轮 | 11m10s | 8.0→7.0 |
+| COMPOSE | 2 轮 | 3m26s | 7.0→8.0 |
+
+详细踩坑记录见 [doc/devrec.md](devrec.md)。
+
+---
+
+## 当前待办（Next Steps）
 
 ### P2 — 用户体验
-- [ ] 前端 Blackboard 详情视图（展示各 artifact 完整内容）
-- [ ] 论文编辑器（渲染 Writer 的 draft artifact）
-- [ ] Agent 详细日志面板（可展开每次迭代的 reasoning_summary）
+- [ ] 前端 `ResearchCompleted` 处理：显示完成状态 + 论文下载链接
+- [ ] 前端 Blackboard 详情视图：点击 artifact 卡片展开 L1/L2 完整内容
+- [ ] 论文预览页：渲染 `exports/paper.md` 内容
+
+### P2 — RAG 闭环
+- [ ] `BM25Store.query()` 返回文本内容（或 Librarian 用 doc_id 反查文本）
+- [ ] arXiv/S2 检索结果入 ChromaDB 持久化
+- [ ] 统一 `safe_json_loads()` 工具函数，集中处理 LLM 输出的 fence 剥离 + JSON 解析
 
 ### P3 — 长期完善
-- [ ] LLM 语义去重（替换当前哈希 dedup）
+- [ ] LLM 语义去重（替换当前直通 dedup）
 - [ ] Agent 输出 Pydantic schema 强校验
 - [ ] 多用户 / 协作功能
 - [ ] 研究可视化（假设演化、证据图）
+- [ ] Magic numbers 收进 config.py 统一管理（300s 超时、3000 字符截断等）

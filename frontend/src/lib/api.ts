@@ -56,6 +56,7 @@ export function getProject(id: string) {
     phase: string;
     status: string;
     created_at: string;
+    updated_at: string;
   }>(`/api/projects/${id}`);
 }
 
@@ -84,26 +85,49 @@ export function resumeProject(id: string) {
 
 // --- Papers ---
 
-export function uploadPaper(file: File) {
+export function uploadPaper(projectId: string, file: File) {
   const form = new FormData();
   form.append("file", file);
-  return request<{ id: string; filename: string }>("/api/papers", {
-    method: "POST",
-    headers: {},
-    body: form,
-  });
-}
-
-export function listPapers() {
-  return request<{ id: string; filename: string; uploaded_at: string }[]>(
-    "/api/papers"
+  return request<{ paper_id: string; filename: string; size_bytes: number }>(
+    `/api/projects/${projectId}/papers/upload`,
+    {
+      method: "POST",
+      headers: {},
+      body: form,
+    }
   );
 }
 
-export function searchPapers(query: string) {
+export function listPapers(projectId: string) {
   return request<
-    { id: string; filename: string; relevance: number }[]
-  >(`/api/papers/search?q=${encodeURIComponent(query)}`);
+    { paper_id: string; filename: string; size_bytes: number }[]
+  >(`/api/projects/${projectId}/papers`);
+}
+
+export function deletePaper(projectId: string, paperId: string) {
+  return request<void>(`/api/projects/${projectId}/papers/${paperId}`, {
+    method: "DELETE",
+  });
+}
+
+export function searchPapers(projectId: string, query: string) {
+  return request<
+    {
+      chunk_id: string;
+      content: string;
+      source: string;
+      score: number;
+      metadata: Record<string, unknown>;
+    }[]
+  >(
+    `/api/projects/${projectId}/papers/search?q=${encodeURIComponent(query)}`
+  );
+}
+
+export function getExportedPaper(projectId: string) {
+  return request<{ content: string; filename: string }>(
+    `/api/projects/${projectId}/export/paper`
+  );
 }
 
 // --- Checkpoints ---

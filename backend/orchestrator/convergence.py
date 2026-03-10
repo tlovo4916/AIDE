@@ -97,6 +97,14 @@ class ConvergenceDetector:
         no_open = signals.open_challenges == 0
         score_ok = signals.critic_score >= self._min_critic_score
 
+        logger.info(
+            "[Convergence] iter=%d open_challenges=%d critic_score=%.1f "
+            "(need >= %.1f) -> no_open=%s score_ok=%s",
+            signals.iteration_count, signals.open_challenges,
+            signals.critic_score, self._min_critic_score,
+            no_open, score_ok,
+        )
+
         return no_open and score_ok
 
     @staticmethod

@@ -62,10 +62,12 @@ class BaseAgent(ABC):
         llm_router: LLMRouter,
         write_back_guard: WriteBackGuard,
         research_topic: str = "",
+        project_id: str = "",
     ) -> None:
         self._llm_router = llm_router
         self._write_back_guard = write_back_guard
         self._research_topic = research_topic
+        self._project_id = project_id
         self._jinja_env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(str(_PROMPTS_DIR)),
             autoescape=False,
@@ -112,12 +114,22 @@ class BaseAgent(ABC):
 
     def _build_prompt(self, context: str, task: AgentTask) -> str:
         template = self._load_prompt_template()
+        # Extract trend signals from context if present
+        trend_signals = ""
+        trend_marker = "## Trend Signals"
+        if trend_marker in context:
+            idx = context.index(trend_marker)
+            # Find the next ## heading or end of string
+            end_idx = context.find("\n## ", idx + len(trend_marker))
+            trend_signals = context[idx:end_idx].strip() if end_idx != -1 else context[idx:].strip()
+
         return template.render(
             role=self.role.value,
             primary_artifacts=[a.value for a in self.primary_artifact_types],
             dependency_artifacts=[a.value for a in self.dependency_artifact_types],
             can_spawn=self.can_spawn_subagents,
             research_topic=self._research_topic,
+            trend_signals=trend_signals,
             context=context,
             task=format_task(task),
         )

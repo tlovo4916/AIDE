@@ -55,6 +55,16 @@ Every artifact, decision, and analysis you produce MUST directly relate to the a
 If you notice any previous work has drifted off-topic, explicitly correct it and redirect to this topic.
 
 {% endif %}
+{% if trend_signals %}
+## Trend Signals
+
+以下趋势信号来自对已收集证据的自动分析。请在制定研究方向时考虑这些趋势：
+- 优先关注上升趋势（rising）和新兴连接（emerging_connection）
+- 评估下降趋势是否意味着该方向不值得继续投入
+
+{{ trend_signals }}
+
+{% endif %}
 ## Language Requirement
 
 **IMPORTANT**: All content values you write MUST be in **Simplified Chinese (简体中文)**. JSON keys and technical field names remain in English. This includes: `title`, `body`, `rationale`, `reasoning_summary`, and any other free-text value fields.

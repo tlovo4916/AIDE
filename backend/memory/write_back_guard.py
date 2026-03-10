@@ -13,6 +13,21 @@ logger = logging.getLogger(__name__)
 LLMCall = Callable[[list[dict[str, str]]], Awaitable[str]]
 
 
+def _strip_markdown_fences(text: str) -> str:
+    """Remove markdown code fences (```json ... ```) wrapping JSON output."""
+    text = text.strip()
+    for fence in ("```json", "```"):
+        idx = text.find(fence)
+        if idx == -1:
+            continue
+        start = idx + len(fence)
+        end = text.find("```", start)
+        if end == -1:
+            continue
+        return text[start:end].strip()
+    return text
+
+
 class WriteBackGuard:
 
     def __init__(self, llm_call: LLMCall) -> None:
@@ -26,6 +41,9 @@ class WriteBackGuard:
         if not agent_response.strip():
             return []
 
+        # Truncate to avoid sending excessively long responses to LLM
+        truncated_response = agent_response[:3000]
+
         executed_summary = json.dumps(
             [
                 {"type": a.action_type.value, "target": a.target}
@@ -37,12 +55,13 @@ class WriteBackGuard:
         prompt = (
             "Analyze the agent response below. Identify findings, conclusions, "
             "or insights NOT already captured by the executed actions.\n\n"
-            f"Response:\n{agent_response}\n\n"
+            f"Response:\n{truncated_response}\n\n"
             f"Executed actions:\n{executed_summary}\n\n"
             "Return a JSON array of objects with keys: "
             '"content" (the unpersisted insight) and "refs" '
             "(list of referenced artifact IDs). "
-            "Return [] if all insights are already captured."
+            "Return [] if all insights are already captured. "
+            "Output raw JSON only. No markdown fences."
         )
 
         try:
@@ -51,13 +70,15 @@ class WriteBackGuard:
                     "role": "system",
                     "content": (
                         "You identify unpersisted reasoning in agent outputs. "
-                        "Respond with valid JSON array only."
+                        "Respond with a valid JSON array only. "
+                        "No markdown fences, no explanation."
                     ),
                 },
                 {"role": "user", "content": prompt},
             ])
 
-            insights = json.loads(result.strip())
+            cleaned = _strip_markdown_fences(result.strip())
+            insights = json.loads(cleaned)
             if not isinstance(insights, list) or not insights:
                 return []
 

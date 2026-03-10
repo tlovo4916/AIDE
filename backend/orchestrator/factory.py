@@ -18,6 +18,7 @@ from backend.blackboard.board import Blackboard
 from backend.blackboard.levels import LevelGenerator
 from backend.checkpoint.manager import CheckpointManager
 from backend.config import settings
+from backend.knowledge.trend_extractor import TrendExtractor
 from backend.llm.router import LLMRouter
 from backend.llm.tracker import TokenTracker
 from backend.memory.write_back_guard import WriteBackGuard
@@ -98,7 +99,7 @@ async def _create_engine(project_id: str) -> OrchestrationEngine:
     agents = {
         AgentRole.DIRECTOR: DirectorAgent(llm_router, write_back_guard, research_topic=research_topic),
         AgentRole.SCIENTIST: ScientistAgent(llm_router, write_back_guard, research_topic=research_topic),
-        AgentRole.LIBRARIAN: LibrarianAgent(llm_router, write_back_guard, research_topic=research_topic),
+        AgentRole.LIBRARIAN: LibrarianAgent(llm_router, write_back_guard, research_topic=research_topic, project_id=str(project_id)),
         AgentRole.WRITER: WriterAgent(llm_router, write_back_guard, research_topic=research_topic),
         AgentRole.CRITIC: CriticAgent(llm_router, write_back_guard, research_topic=research_topic),
     }
@@ -116,6 +117,7 @@ async def _create_engine(project_id: str) -> OrchestrationEngine:
     _checkpoint_managers[project_id] = checkpoint_mgr
     checkpoint_bridge = _CheckpointBridge(checkpoint_mgr)
     heartbeat = HeartbeatMonitor()
+    trend_extractor = TrendExtractor(llm_router)
 
     async def _on_phase_change(new_phase: str) -> None:
         try:
@@ -138,6 +140,7 @@ async def _create_engine(project_id: str) -> OrchestrationEngine:
         heartbeat=heartbeat,
         ws_broadcast=_build_ws_broadcast(project_id),
         on_phase_change=_on_phase_change,
+        trend_extractor=trend_extractor,
     )
 
     subagent_pool = SubAgentPool(llm_router)

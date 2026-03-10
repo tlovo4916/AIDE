@@ -38,6 +38,7 @@ class ArtifactType(str, Enum):
     OUTLINE = "outline"
     DRAFT = "draft"
     REVIEW = "review"
+    TREND_SIGNALS = "trend_signals"
 
 
 class ContextLevel(str, Enum):

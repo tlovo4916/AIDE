@@ -72,10 +72,10 @@ The orchestrator detects convergence (via `CriticAgent` score threshold + stable
 - `heartbeat.py` - Crash recovery
 
 **`backend/blackboard/`**
-- `board.py` - Filesystem-backed artifact store (JSON in `workspace/projects/{id}/`)；`get_state_summary()` 顶部始终注入研究课题
-- `adapter.py` - `BoardAdapter` 存在但**目前 factory.py 直接使用 `Blackboard`，该文件可能是死代码**
-- `levels.py` - L0 (50-token abstract) / L1 (500-token overview) / L2 (full content) for context budgeting
-- `actions.py` - Action types and executor
+- `board.py` - Filesystem-backed artifact store；`get_state_summary()` 顶部始终注入研究课题；`resolve_challenge()` 支持自动 dismiss；`export_paper()` 导出最终 draft 到 `exports/paper.md`
+- `context_builder.py` - **Token 预算 ContextBuilder**：L2→L1→L0 自动降级，确保 context 不超 30K tokens
+- `levels.py` - L0/L1/L2 generation via LLM with truncation fallback
+- `actions.py` - Action executor（含 write_artifact/post_message/raise_challenge/resolve_challenge）
 
 **`backend/agents/`** - All extend `BaseAgent` (`base.py`)；构造时接收 `research_topic`，渲染 Jinja2 模板时传入
 
@@ -103,7 +103,7 @@ Agents receive context at different detail levels based on token budget (default
 ### Frontend
 - Next.js 15 App Router, React 19, TypeScript, Tailwind CSS 4
 - `frontend/src/lib/api.ts` - HTTP client functions
-- `frontend/src/lib/ws-protocol.ts` - WebSocket frame types（含 `TopicDriftWarning` 事件）
+- `frontend/src/lib/ws-protocol.ts` - WebSocket frame types（含 `TopicDriftWarning`、`ResearchCompleted` 事件）
 - `frontend/src/components/ui/markdown.tsx` - 自定义 Markdown 渲染组件（替代 react-markdown，因其 v9 纯 ESM 与 Next.js webpack 不兼容）
 - Real-time blackboard state updates via WebSocket (`api/ws.py`)
 
@@ -126,6 +126,20 @@ All backend settings are Pydantic `BaseSettings` in `backend/config.py`, overrid
 
 ### Session 3（2026-02-28）— 设置持久化
 5. **`backend/api/settings.py`** + **`backend/main.py`**：设置写入 `/app/workspace/settings_overrides.json`（Docker volume 内），lifespan 启动时自动恢复，解决容器重启后设置丢失问题。
+
+### Session 5（2026-03-02）— P0/P1 功能补全
+
+#### P0 — 阻塞核心功能修复
+16. **Challenge 自动解决**：`engine.py` `_handle_challenges()` 新增自动 dismiss 逻辑——当 `phase_iters > 2` 时，对未解决 challenge 调用 `board.resolve_challenge()` 并广播 `ChallengeResolved` WS 事件，防止收敛条件永久阻塞。
+17. **Phase COMPLETE 论文导出**：`engine.run()` 退出后若 `phase == COMPLETE`，调用 `_on_research_complete()` → `board.export_paper()` 将最新 DRAFT 写入 `exports/paper.md`，广播 `ResearchCompleted` WS 事件。
+
+#### P1 — 真实研究能力
+18. **Librarian 真实 arXiv 检索**：`LibrarianAgent` 覆写 `execute()`，在调用 LLM 前先 `_enrich_context_with_literature()`——通过 `WebRetriever.search_arxiv()` 拉取真实论文摘要并注入 context（受 `AIDE_ENABLE_WEB_RETRIEVAL` 开关控制，`.env` 已设为 `true`）。
+19. **ContextBuilder Token 预算**：新建 `backend/blackboard/context_builder.py`，`build_budget_context()` 按 L2→L1→L0 顺序降级，直到 context token 数 ≤ `AIDE_CONTEXT_BUDGET_TOKENS`（默认 30K），最终兜底硬截断。`engine._build_state_summary()` 改用此函数。
+20. **`settings_overrides.json` 管理**：`enable_web_retrieval` 持久化覆盖问题：`.env` / `.env.example` 均改为 `true`，并需在设置页手动打开或通过 API 更新（`POST /api/settings`）。
+
+#### P1.2（已验证存在）
+- PDF 处理流水线（`papers.py` + `PDFProcessor` + `EmbeddingService` + `VectorStore` + `BM25Store`）已完整实现，用户上传 PDF 后自动入库 ChromaDB + BM25。
 
 ### Session 4（2026-03-02）— 前端体验 + 引擎稳定性 + 研究课题修复
 
@@ -157,25 +171,48 @@ All backend settings are Pydantic `BaseSettings` in `backend/config.py`, overrid
     - 5 个 `.j2` 模板：专门的课题强调区块
     - `engine.py`：`_check_on_topic()` 每轮关键词匹配检查（<20% 触发 `TopicDriftWarning` WS 事件）
 
+### Session 6（2026-03-11）— 核心质量链路修复 + 性能实测
+
+#### P0 — Critic 分数链路（修复前分数始终 0.0，阶段只能靠 max_iterations 超时推进）
+21. **`engine.py:293-296`**：分数提取条件从 `art_type == "review"`（依赖 LLM 输出正确 artifact_type）改为 `action.agent_role == AgentRole.CRITIC`（直接判断角色）。`_extract_critic_score()` 新增 dict 类型嵌套 content 的直接遍历。
+22. **`levels.py`**：`generate_l1()` 在 `json.loads()` 前增加 `_strip_markdown_fences()` 剥离 markdown fence（DeepSeek 常返回 ` ```json ``` ` 包裹内容）。强化 system prompt 为 `"Output raw JSON only. No markdown fences, no comments, no explanation."`。
+23. **`critic.j2`**：输出格式示例中补上 `"artifact_type": "review"` 和 `"action_type": "write_artifact"`，IMPORTANT 中明确强调。
+
+#### P1 — 降噪 + 检索修复
+24. **`write_back_guard.py`**：加 `_strip_markdown_fences()` + 输入截断到 3000 字符 + 强化 system prompt，减少 JSON 解析失败。
+25. **`librarian.py:_search_local_knowledge()`**：重构为先尝试 Hybrid search（vector+BM25），SSL 失败时 graceful fallback 到纯 BM25（`bm25_store.query()`）。修复了 `search()` → `query()` 方法名不匹配的 bug。
+26. **`web_retriever.py`**：`_MAX_RETRIES` 2→3，`_RATE_LIMIT_BACKOFF` 10→15s，新增 `Retry-After` header 读取动态 backoff。
+27. **`librarian.py:_search_with_fallback()`**：新增 `_query_cache: set[str]` 去重缓存，同一 query 不重复请求 S2/arXiv API。
+
+#### P2 — 清理
+28. **`actions.py`**：补上 `SPAWN_SUBAGENT` handler（`_exec_spawn_subagent`），记录为 blackboard message，消除 "Unhandled action type" 警告。
+29. **`heartbeat.py` + `config.py`**：stale 阈值从硬编码 `interval*3`（180s）改为可配置 `heartbeat_stale_threshold_seconds=360`（`AIDE_HEARTBEAT_STALE_THRESHOLD_SECONDS`），消除 agent 执行期间的误报。
+
+#### 性能实测数据（英文课题 "LLM inference optimization"，deepseek-chat + deepseek-reasoner 混合）
+- **总耗时 33 分 51 秒**，14 轮迭代，4 个阶段全部通过 critic 质量评判收敛推进
+- EXPLORE: 4 轮 10m39s（含 S2 首次 429 重试 97s）| critic=7.0
+- HYPOTHESIZE: 4 轮 8m36s | critic=7.0→8.0→6.0
+- EVIDENCE: 4 轮 11m10s | critic=8.0→7.0
+- COMPOSE: 2 轮 3m26s（含 SubAgent 并行撰写）| critic=7.0→8.0
+- S2 首次请求因 429 需 ~97s（15+30+45s backoff），后续 ~1s
+- Agent 单次调用：Librarian 2-4min，Scientist ~3min，Director ~1.75min，Critic ~2.5min，Writer ~2.25min
+
 ---
 
 ## 已知未完成 / 待改进项
 
-### 高优先级
-- **`adapter.py` 可能是死代码**：`factory.py` 直接使用 `Blackboard` 而非 `BoardAdapter`，需确认 `BoardAdapter` 是否还有存在意义。
-- **`dedup_check` 是空操作**：`board.py` 注释写明"dedup requires embedding service, skip when unavailable"，ChromaDB 虽然在跑但未集成到去重逻辑。
-- **最终论文无法导出**：研究完成后用户无法下载/查看最终 draft artifact，前端缺少导出入口。
-- **偏题检查是关键词匹配**：`_check_on_topic()` 用字符串匹配，不做语义理解；如果课题是纯中文而 artifacts 也是中文但用词不同则可能误报。
+### 高优先级（P2 功能）
+- **Librarian 本地知识检索内容缺失**：BM25 fallback 只返回 doc_id+score，不返回 content（`BM25Store` 的 `query()` 不返回文本）。需要在 fallback 中用 doc_id 反查 `_doc_texts` 或改 `BM25Store.query()` 返回文本。
+- **dedup_check 是空操作**：`board.py` 注释写明"dedup requires embedding service"，ChromaDB 虽运行但未集成到去重逻辑。
+- **前端缺少论文导出入口**：`exports/paper.md` 已生成但前端无下载/预览 UI，`ResearchCompleted` WS 事件未处理。
 
 ### 中优先级
-- **Planner 是纯规则轮转**：`OrchestratorPlanner` 注释写明 `llm_router` "kept for interface compatibility but not used"，Agent 顺序固定，无法根据研究进展动态调整。
-- **ChromaDB 未实际用于向量检索**：服务启动但 Librarian agent 没有真正调用向量搜索，所有"文献检索"都是 LLM 凭记忆生成。
-- **Papers API**（`backend/api/papers.py`）：功能状态不明，未经过完整测试。
-- **前端项目列表页**：缺乏运行中项目的进度预览，只有基本列表。
-- **写回守卫（WriteBackGuard）**：存在但实际效果未经验证。
+- **Planner 是纯规则轮转**：Agent 顺序固定，无法根据研究进展动态调整（`llm_router` 仅保留接口兼容性）。
+- **偏题检查是关键词匹配**：`_check_on_topic()` 用字符串匹配，不做语义理解。
+- **前端 Blackboard 详情视图**：当前只展示 L0 摘要卡片，未实现点击展开 L1/L2 完整内容。
+- **WriteBackGuard 效果待验证**：降噪已做（fence 剥离 + 截断），但实际是否产生有价值的 write-back artifact 未确认。
 
 ### 低优先级
-- **Agent 超时 300s**：对慢速 LLM 调用可能仍不够，但太长会拖慢迭代。
-- **LLM API 错误处理**：key 失效或限流时错误信息不够友好，无前端提示。
-- **SubAgent 研究课题**：subagent 通过 context（board state summary）间接获得课题，未做独立验证。
-- **暗色/亮色模式**：CSS 变量已完成，但部分 Badge / Modal 组件在亮色下视觉未精调。
+- **Challenge 处理**：自动 dismiss（>2 iters）已实现，但未测试完整 raise→respond→resolve 流程。
+- **`adapter.py` 可能是死代码**：`factory.py` 直接使用 `Blackboard`，`BoardAdapter` 可能无存在意义。
+- **Agent 超时 300s**：实测中未触发超时，但 Librarian 含 S2 重试时理论可达 ~4min，接近阈值。

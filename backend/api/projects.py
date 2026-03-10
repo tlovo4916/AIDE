@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -254,3 +255,42 @@ async def resume_project(
     await engine_factory.start_engine(pid)
 
     return project
+
+
+@router.get("/{project_id}/export/paper")
+async def get_exported_paper(
+    project_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Return exported paper content as JSON."""
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    paper_path = settings.project_path(str(project_id)) / "exports" / "paper.md"
+    if not paper_path.exists():
+        raise HTTPException(404, "Paper not yet exported")
+
+    content = paper_path.read_text(encoding="utf-8")
+    return {"content": content, "filename": "paper.md"}
+
+
+@router.get("/{project_id}/export/paper/download")
+async def download_exported_paper(
+    project_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+) -> FileResponse:
+    """Download exported paper as .md file."""
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    paper_path = settings.project_path(str(project_id)) / "exports" / "paper.md"
+    if not paper_path.exists():
+        raise HTTPException(404, "Paper not yet exported")
+
+    return FileResponse(
+        path=str(paper_path),
+        filename=f"{project.name}_paper.md",
+        media_type="text/markdown",
+    )

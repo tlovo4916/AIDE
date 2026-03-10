@@ -86,6 +86,21 @@ _L0_MAX_CHARS = 200
 _L1_MAX_CHARS = 2000
 
 
+def _strip_markdown_fences(text: str) -> str:
+    """Remove markdown code fences (```json ... ```) wrapping JSON output."""
+    text = text.strip()
+    for fence in ("```json", "```"):
+        idx = text.find(fence)
+        if idx == -1:
+            continue
+        start = idx + len(fence)
+        end = text.find("```", start)
+        if end == -1:
+            continue
+        return text[start:end].strip()
+    return text
+
+
 class LevelGenerator:
 
     def __init__(self, llm_call: LLMCall) -> None:
@@ -120,11 +135,15 @@ class LevelGenerator:
             result = await self._llm_call([
                 {
                     "role": "system",
-                    "content": "You are a structured summarizer. Output valid JSON only.",
+                    "content": (
+                        "You are a structured summarizer. "
+                        "Output raw JSON only. No markdown fences, no comments, no explanation."
+                    ),
                 },
                 {"role": "user", "content": prompt},
             ])
-            return json.loads(result.strip())
+            cleaned = _strip_markdown_fences(result.strip())
+            return json.loads(cleaned)
         except json.JSONDecodeError:
             logger.warning("LLM L1 returned invalid JSON, using truncation")
             return self._truncate_l1(content_l2, artifact_type)

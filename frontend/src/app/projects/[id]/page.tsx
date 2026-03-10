@@ -20,6 +20,10 @@ import {
   ArrowLeft,
   X,
   Trash2,
+  Clock,
+  Calendar,
+  TrendingUp,
+  Download,
 } from "lucide-react";
 import Link from "next/link";
 import {
@@ -29,7 +33,9 @@ import {
   pauseProject,
   resumeProject,
   deleteProject,
+  getExportedPaper,
 } from "@/lib/api";
+import { PapersPanel } from "@/components/papers-panel";
 import { useTypedWebSocket } from "@/hooks/useTypedWebSocket";
 import { useBlackboard } from "@/hooks/useBlackboard";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -43,6 +49,8 @@ interface Project {
   research_topic: string;
   phase: string;
   status: string;
+  created_at: string;
+  updated_at: string;
 }
 
 interface AgentEvent {
@@ -74,6 +82,7 @@ const ARTIFACT_SECTIONS = [
   { type: "outline", label: "Outline", icon: BookOpen },
   { type: "draft", label: "Draft", icon: PenTool },
   { type: "review", label: "Review", icon: CheckCircle2 },
+  { type: "trend_signals", label: "Trend Signals", icon: TrendingUp },
 ] as const;
 
 type ArtifactType = (typeof ARTIFACT_SECTIONS)[number]["type"];
@@ -189,7 +198,7 @@ function ActivityFeed({ events }: { events: AgentEvent[] }) {
               <div className="flex items-center justify-between">
                 <Badge variant="agent">{evt.agent}</Badge>
                 <span className="text-aide-text-muted">
-                  {parseTS(evt.timestamp).toLocaleTimeString()}
+                  {formatDateTime(evt.timestamp)}
                 </span>
               </div>
               <p className="mt-1 text-aide-text-secondary">{evt.action}</p>
@@ -209,6 +218,96 @@ function parseTS(ts: string): Date {
     return new Date(ts + "Z");
   }
   return new Date(ts);
+}
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  if (totalSec < 60) return `${totalSec}秒`;
+  const totalMin = Math.floor(totalSec / 60);
+  if (totalMin < 60) return `${totalMin}分钟`;
+  const hours = Math.floor(totalMin / 60);
+  const mins = totalMin % 60;
+  if (hours < 24) return mins > 0 ? `${hours}小时${mins}分钟` : `${hours}小时`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours > 0 ? `${days}天${remHours}小时` : `${days}天`;
+}
+
+function formatDateTime(ts: string): string {
+  const d = parseTS(ts);
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  return `${month}-${day} ${h}:${m}`;
+}
+
+function formatDateTimeFull(ts: string): string {
+  const d = parseTS(ts);
+  const y = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  return `${y}-${month}-${day} ${h}:${m}:${s}`;
+}
+
+function useElapsedTime(since: string | undefined, active: boolean) {
+  const [elapsed, setElapsed] = useState("");
+  useEffect(() => {
+    if (!since) { setElapsed(""); return; }
+    const update = () => {
+      const ms = Date.now() - parseTS(since).getTime();
+      setElapsed(formatElapsed(Math.max(0, ms)));
+    };
+    update();
+    if (!active) return;
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [since, active]);
+  return elapsed;
+}
+
+function ProjectTimeInfo({ project }: { project: Project }) {
+  const isRunning = project.status === "running";
+  const isPaused = project.status === "paused";
+  const isCompleted = project.status === "completed";
+  const totalElapsed = useElapsedTime(project.created_at, isRunning);
+  const sinceUpdate = useElapsedTime(project.updated_at, isPaused);
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 text-xs text-aide-text-muted">
+        <Calendar className="h-3 w-3 flex-shrink-0" />
+        <span>创建于 {formatDateTimeFull(project.created_at)}</span>
+      </div>
+      {isRunning && (
+        <div className="flex items-center gap-2 text-xs text-aide-accent-blue">
+          <Clock className="h-3 w-3 flex-shrink-0 animate-pulse-subtle" />
+          <span>已运行 {totalElapsed}</span>
+        </div>
+      )}
+      {isPaused && (
+        <div className="flex items-center gap-2 text-xs text-aide-accent-amber">
+          <Pause className="h-3 w-3 flex-shrink-0" />
+          <span>已暂停 {sinceUpdate}（{formatDateTime(project.updated_at)}起）</span>
+        </div>
+      )}
+      {isCompleted && (
+        <div className="flex items-center gap-2 text-xs text-aide-accent-green">
+          <CheckCircle2 className="h-3 w-3 flex-shrink-0" />
+          <span>完成于 {formatDateTimeFull(project.updated_at)}</span>
+        </div>
+      )}
+      {!isRunning && !isPaused && !isCompleted && (
+        <div className="flex items-center gap-2 text-xs text-aide-text-muted">
+          <Clock className="h-3 w-3 flex-shrink-0" />
+          <span>上次更新 {formatDateTime(project.updated_at)}</span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ArtifactCard({ item }: { item: unknown }) {
@@ -366,7 +465,7 @@ function MessageStream({
                   {msg.role}
                 </span>
                 <span className="text-xs text-aide-text-muted">
-                  {parseTS(msg.timestamp).toLocaleTimeString()}
+                  {formatDateTime(msg.timestamp)}
                 </span>
               </div>
               <p className="text-xs text-aide-text-secondary">{msg.content}</p>
@@ -394,6 +493,8 @@ export default function ProjectPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [paperContent, setPaperContent] = useState<string | null>(null);
+  const [showPaperModal, setShowPaperModal] = useState(false);
 
   const ws = useTypedWebSocket(projectId);
   const blackboard = useBlackboard(ws, projectId);
@@ -405,11 +506,10 @@ export default function ProjectPage() {
       .finally(() => setLoading(false));
   }, [projectId]);
 
-  // 每 30s 轮询一次项目状态（刷新 phase / status）
   useEffect(() => {
     const timer = setInterval(() => {
       getProject(projectId)
-        .then((p) => setProject((prev) => prev ? { ...prev, phase: p.phase, status: p.status } : p))
+        .then((p) => setProject((prev) => prev ? { ...prev, phase: p.phase, status: p.status, updated_at: p.updated_at } : p))
         .catch(() => {});
     }, 30_000);
     return () => clearInterval(timer);
@@ -453,6 +553,16 @@ export default function ProjectPage() {
         setTopicDriftWarning(payload.message);
         // 5 秒后自动隐藏
         setTimeout(() => setTopicDriftWarning(null), 8_000);
+      }),
+      ws.subscribe("ResearchCompleted", () => {
+        setProject((prev) => prev ? { ...prev, status: "completed", phase: "complete" } : prev);
+        // Auto-load paper content
+        getExportedPaper(projectId)
+          .then((data) => {
+            setPaperContent(data.content);
+            setShowPaperModal(true);
+          })
+          .catch(() => {});
       }),
     ];
 
@@ -559,6 +669,9 @@ export default function ProjectPage() {
             <p className="text-sm text-aide-text-secondary">
               {project.research_topic}
             </p>
+            <div className="mt-1">
+              <ProjectTimeInfo project={project} />
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -596,6 +709,24 @@ export default function ProjectPage() {
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
+          {project.status === "completed" && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={async () => {
+                try {
+                  const data = await getExportedPaper(projectId);
+                  setPaperContent(data.content);
+                  setShowPaperModal(true);
+                } catch {
+                  /* paper not available */
+                }
+              }}
+            >
+              <BookOpen className="mr-1.5 h-3.5 w-3.5" />
+              查看论文
+            </Button>
+          )}
           <Button
             variant={isRunning ? "secondary" : "primary"}
             size="sm"
@@ -649,6 +780,39 @@ export default function ProjectPage() {
             )}
           </div>
           <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-aide-accent-blue" />
+        </div>
+      )}
+
+      {/* 研究暂停横幅 */}
+      {project.status === "paused" && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-aide-accent-amber/30 bg-aide-accent-amber/5 px-4 py-3">
+          <Pause className="h-4 w-4 flex-shrink-0 text-aide-accent-amber" />
+          <div className="flex flex-1 items-center gap-2 min-w-0">
+            <span className="text-sm font-medium text-aide-accent-amber">研究已暂停</span>
+            {currentPhaseMeta && (
+              <>
+                <span className="text-aide-text-muted">·</span>
+                <span className="text-sm text-aide-text-secondary">停在 {currentPhaseMeta.label} 阶段</span>
+              </>
+            )}
+            <span className="text-aide-text-muted">·</span>
+            <span className="text-sm text-aide-text-muted">
+              暂停于 {formatDateTime(project.updated_at)}
+            </span>
+          </div>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleToggleRunning}
+            disabled={actionLoading}
+          >
+            {actionLoading ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Play className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            继续研究
+          </Button>
         </div>
       )}
 
@@ -715,8 +879,9 @@ export default function ProjectPage() {
           )}
         </div>
 
-        {/* Right Column: Challenges + Messages */}
+        {/* Right Column: Papers + Challenges + Messages */}
         <div className="space-y-6 overflow-y-auto" style={{ maxHeight: "calc(100vh - 120px)" }}>
+          <PapersPanel projectId={projectId} />
           <ChallengePanel challenges={blackboard.challenges} />
           <MessageStream messages={blackboard.messages} />
         </div>
@@ -785,6 +950,39 @@ export default function ProjectPage() {
                   {opt.label}
                 </button>
               ))}
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Paper Preview Modal */}
+      <Modal
+        isOpen={showPaperModal}
+        onClose={() => setShowPaperModal(false)}
+        title="研究论文"
+      >
+        {paperContent && (
+          <div className="space-y-4">
+            <div className="max-h-[60vh] overflow-y-auto rounded-md border border-aide-border bg-aide-bg-tertiary p-4">
+              <Markdown className="md-content">{paperContent}</Markdown>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="md"
+                onClick={() => setShowPaperModal(false)}
+              >
+                关闭
+              </Button>
+              <a
+                href={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/projects/${projectId}/export/paper/download`}
+                download
+              >
+                <Button variant="primary" size="md">
+                  <Download className="mr-2 h-4 w-4" />
+                  下载 Markdown
+                </Button>
+              </a>
             </div>
           </div>
         )}

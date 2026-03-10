@@ -40,9 +40,10 @@ Respond with a **valid JSON object** using this structure:
 {
     "actions": [
         {
-            "action_type": "<one of: write_artifact, post_message, raise_challenge, request_info>",
+            "action_type": "write_artifact",
             "target": "<artifact id being reviewed>",
             "content": {
+                "artifact_type": "review",
                 "score": 7,
                 "strengths": ["..."],
                 "weaknesses": ["..."],
@@ -55,8 +56,9 @@ Respond with a **valid JSON object** using this structure:
     "reasoning_summary": "<brief explanation of your evaluation criteria and findings>"
 }
 
-IMPORTANT: Every review artifact MUST include a numeric "score" field (1-10)
-inside `content`.
+IMPORTANT:
+- Every write_artifact action MUST have `"artifact_type": "review"` in content.
+- Every review artifact MUST include a numeric "score" field (1-10) inside `content`.
 
 action_type values:
 - write_artifact -- create or update a review artifact (always include score)

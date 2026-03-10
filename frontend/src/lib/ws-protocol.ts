@@ -94,6 +94,11 @@ export interface TopicDriftWarningPayload {
   message: string;
 }
 
+export interface ResearchCompletedPayload {
+  phase: string;
+  paper_path: string | null;
+}
+
 // Union of all push event names
 export type WSPushEvent =
   | "CheckpointCreated"
@@ -108,7 +113,8 @@ export type WSPushEvent =
   | "ChallengeRaised"
   | "ChallengeResolved"
   | "ArtifactUpdated"
-  | "TopicDriftWarning";
+  | "TopicDriftWarning"
+  | "ResearchCompleted";
 
 export type WSPushPayloadMap = {
   CheckpointCreated: CheckpointCreatedPayload;
@@ -124,4 +130,5 @@ export type WSPushPayloadMap = {
   ChallengeResolved: ChallengeResolvedPayload;
   ArtifactUpdated: ArtifactUpdatedPayload;
   TopicDriftWarning: TopicDriftWarningPayload;
+  ResearchCompleted: ResearchCompletedPayload;
 };

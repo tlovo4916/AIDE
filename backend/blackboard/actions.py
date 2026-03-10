@@ -33,6 +33,7 @@ WRITE_PERMISSIONS: dict[AgentRole, set[ArtifactType]] = {
         ArtifactType.EVIDENCE_FINDINGS,
         ArtifactType.EVIDENCE_GAPS,
         ArtifactType.EXPERIMENT_GUIDE,
+        ArtifactType.TREND_SIGNALS,
     },
     AgentRole.LIBRARIAN: {ArtifactType.EVIDENCE_FINDINGS, ArtifactType.EVIDENCE_GAPS},
     AgentRole.WRITER: {ArtifactType.OUTLINE, ArtifactType.DRAFT},
@@ -51,6 +52,7 @@ class ActionExecutor:
             ActionType.RAISE_CHALLENGE: self._exec_raise_challenge,
             ActionType.RESOLVE_CHALLENGE: self._exec_resolve_challenge,
             ActionType.REQUEST_INFO: self._exec_request_info,
+            ActionType.SPAWN_SUBAGENT: self._exec_spawn_subagent,
         }
 
         handler = handlers.get(action.action_type)
@@ -86,10 +88,31 @@ class ActionExecutor:
             )
 
     @staticmethod
+    def _is_content_empty(content: dict) -> bool:
+        """Return True if the content dict has no meaningful data."""
+        skip_keys = {"artifact_type", "artifact_id", "version", "tags", "agent_role"}
+        for k, v in content.items():
+            if k in skip_keys:
+                continue
+            if isinstance(v, str) and v.strip():
+                return False
+            if isinstance(v, (int, float)) and v != 0:
+                return False
+            if isinstance(v, (list, dict)) and v:
+                return False
+        return True
+
+    @staticmethod
     async def _exec_write_artifact(
         action: BlackboardAction, board: Blackboard
     ) -> None:
         c = action.content
+        if ActionExecutor._is_content_empty(c):
+            logger.warning(
+                "Rejecting empty artifact from %s: %s",
+                action.agent_role.value, {k: type(v).__name__ for k, v in c.items()},
+            )
+            return
         _ROLE_DEFAULT: dict[AgentRole, ArtifactType] = {
             AgentRole.DIRECTOR: ArtifactType.DIRECTIONS,
             AgentRole.SCIENTIST: ArtifactType.HYPOTHESES,
@@ -147,11 +170,17 @@ class ActionExecutor:
         action: BlackboardAction, board: Blackboard
     ) -> None:
         c = action.content
+        argument = c.get("argument", "").strip()
+        if not argument:
+            logger.warning(
+                "Rejecting empty challenge from %s", action.agent_role.value
+            )
+            return
         rec = ChallengeRecord(
             challenge_id=c.get("challenge_id", str(uuid.uuid4())),
             challenger=action.agent_role,
             target_artifact=c.get("target_artifact", action.target),
-            argument=c.get("argument", ""),
+            argument=argument,
             evidence_refs=c.get("evidence_refs", []),
         )
         await board.write_challenge(rec)
@@ -181,6 +210,27 @@ class ActionExecutor:
             from_agent=action.agent_role,
             content=f"[INFO REQUEST] {action.content.get('query', '')}",
             refs=action.content.get("refs", []),
+        )
+        await board.post_message(msg)
+
+    @staticmethod
+    async def _exec_spawn_subagent(
+        action: BlackboardAction, board: Blackboard
+    ) -> None:
+        """Record spawn_subagent requests as messages.
+
+        Actual subagent spawning is handled by the engine's SubAgentPool;
+        here we just log the request so it's visible on the blackboard.
+        """
+        c = action.content
+        msg = Message(
+            message_id=str(uuid.uuid4()),
+            from_agent=action.agent_role,
+            content=(
+                f"[SUBAGENT REQUEST] role={c.get('role', '?')} "
+                f"task={c.get('task', c.get('description', ''))[:200]}"
+            ),
+            refs=c.get("refs", []),
         )
         await board.post_message(msg)
 

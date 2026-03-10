@@ -74,6 +74,17 @@ Every hypothesis, methodology, and analysis you produce MUST directly relate to 
 If you notice any previous work has drifted off-topic, explicitly correct it and redirect to this topic.
 
 {% endif %}
+{% if trend_signals %}
+## Trend Signals
+
+以下趋势信号来自对已收集证据的自动分析。请在假设验证和方法论设计中考虑这些趋势：
+- 验证上升趋势（rising）是否有充分的证据支持
+- 评估新兴连接（emerging_connection）是否可以形成新的假设
+- 关注下降趋势背后的原因，判断是否存在方法论局限
+
+{{ trend_signals }}
+
+{% endif %}
 ## Language Requirement
 
 **IMPORTANT**: All content values you write MUST be in **Simplified Chinese (简体中文)**. JSON keys and technical field names remain in English. This includes: `hypothesis`, `methodology`, `rationale`, `reasoning_summary`, and any other free-text value fields.

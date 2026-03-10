@@ -50,14 +50,14 @@ _PHASE_SEQUENCES: dict[ResearchPhase, list[AgentRole]] = {
 
 _PHASE_TASKS: dict[ResearchPhase, dict[AgentRole, str]] = {
     ResearchPhase.EXPLORE: {
-        AgentRole.LIBRARIAN: "Search and collect foundational literature on the research topic. Identify key papers, authors, methodologies, and open questions.",
-        AgentRole.DIRECTOR: "Review gathered literature and set clear research directions. Define scope, key questions, and success criteria.",
-        AgentRole.SCIENTIST: "Analyze the collected evidence to identify patterns, gaps, and potential hypotheses worth investigating.",
+        AgentRole.LIBRARIAN: "Search and collect foundational literature on the research topic. Identify key papers, authors, methodologies, and open questions. If trend signals are available, prioritize searching for evidence on rising trends and emerging connections.",
+        AgentRole.DIRECTOR: "Review gathered literature and set clear research directions. Define scope, key questions, and success criteria. If trend signals are available, incorporate rising trends and emerging connections into the research strategy.",
+        AgentRole.SCIENTIST: "Analyze the collected evidence to identify patterns, gaps, and potential hypotheses worth investigating. Pay attention to any trend signals — rising trends may indicate promising research directions.",
         AgentRole.CRITIC: "Evaluate the current research state. Assess coverage of the topic, quality of sources, and identify gaps. Assign an overall score (1-10).",
     },
     ResearchPhase.HYPOTHESIZE: {
-        AgentRole.SCIENTIST: "Formulate specific, testable hypotheses based on the literature survey. Define variables, expected outcomes, and validation methods.",
-        AgentRole.DIRECTOR: "Review and refine the proposed hypotheses. Prioritize the most promising ones and set research strategy.",
+        AgentRole.SCIENTIST: "Formulate specific, testable hypotheses based on the literature survey. Define variables, expected outcomes, and validation methods. Leverage trend signals to identify hypotheses aligned with rising trends or emerging connections.",
+        AgentRole.DIRECTOR: "Review and refine the proposed hypotheses. Prioritize the most promising ones and set research strategy. Consider trend signals when prioritizing — hypotheses aligned with rising trends may have higher impact.",
         AgentRole.CRITIC: "Evaluate the hypotheses for logical soundness, testability, and novelty. Assign an overall score (1-10).",
         AgentRole.LIBRARIAN: "Search for additional evidence to support or challenge the proposed hypotheses.",
     },

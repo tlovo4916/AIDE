@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Plus, FlaskConical, Calendar, Loader2, X, Trash2, AlertTriangle } from "lucide-react";
+import { Plus, FlaskConical, Calendar, Clock, Loader2, X, Trash2, AlertTriangle } from "lucide-react";
 import { listProjects, createProject, deleteProject } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +32,18 @@ const STATUS_VARIANT: Record<string, "success" | "warning" | "default"> = {
   completed: "default",
   failed: "default",
 };
+
+function formatRelativeTime(isoStr: string): string {
+  const ts = isoStr.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoStr) ? isoStr : isoStr + "Z";
+  const ms = Date.now() - new Date(ts).getTime();
+  const totalMin = Math.floor(ms / 60_000);
+  if (totalMin < 1) return "刚刚";
+  if (totalMin < 60) return `${totalMin}分钟前`;
+  const hours = Math.floor(totalMin / 60);
+  if (hours < 24) return `${hours}小时前`;
+  const days = Math.floor(hours / 24);
+  return `${days}天前`;
+}
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -193,12 +205,26 @@ export default function DashboardPage() {
                       <Badge variant="phase">
                         {PHASE_LABELS[project.phase] ?? project.phase}
                       </Badge>
-                      <span className="flex items-center gap-1 text-xs text-aide-text-muted">
-                        <Calendar className="h-3 w-3" />
-                        {new Date(
-                          project.created_at.endsWith("Z") ? project.created_at : project.created_at + "Z"
-                        ).toLocaleDateString()}
-                      </span>
+                      <div className="flex flex-col items-end gap-0.5">
+                        <span className="flex items-center gap-1 text-xs text-aide-text-muted">
+                          <Calendar className="h-3 w-3" />
+                          {new Date(
+                            project.created_at.endsWith("Z") ? project.created_at : project.created_at + "Z"
+                          ).toLocaleDateString()}
+                        </span>
+                        {project.status === "running" && (
+                          <span className="flex items-center gap-1 text-xs text-aide-accent-blue">
+                            <Clock className="h-3 w-3 animate-pulse" />
+                            运行中
+                          </span>
+                        )}
+                        {project.status === "paused" && (
+                          <span className="flex items-center gap-1 text-xs text-aide-accent-amber">
+                            <Clock className="h-3 w-3" />
+                            暂停 {formatRelativeTime(project.created_at)}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>

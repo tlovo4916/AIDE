@@ -3,15 +3,46 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 from typing import Any
 
 import httpx
 
 from backend.config import settings
 
+logger = logging.getLogger(__name__)
+
 SEMANTIC_SCHOLAR_BASE = "https://api.semanticscholar.org/graph/v1"
 ARXIV_API_BASE = "https://export.arxiv.org/api/query"
-REQUEST_DELAY = 1.0
+REQUEST_DELAY = 1.5
+_MAX_RETRIES = 3
+_RATE_LIMIT_BACKOFF = 15.0
+
+
+def _extract_english_keywords(text: str) -> str:
+    """Extract ASCII words from text; if none, transliterate key concepts."""
+    ascii_words = re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}", text)
+    if ascii_words:
+        return " ".join(ascii_words[:12])
+    _CN_TO_EN: dict[str, str] = {
+        "纳米": "nanomaterial", "材料": "material", "免疫": "immune",
+        "脓毒症": "sepsis", "炎症": "inflammation", "抗炎": "anti-inflammatory",
+        "巨噬细胞": "macrophage", "训练免疫": "trained immunity",
+        "细胞因子": "cytokine", "氧化应激": "oxidative stress",
+        "靶向": "targeted", "递送": "delivery", "脂质体": "liposome",
+        "聚合物": "polymer", "水凝胶": "hydrogel", "肿瘤": "tumor",
+        "蛋白": "protein", "基因": "gene", "检索": "retrieval",
+        "深度学习": "deep learning", "注意力": "attention",
+        "大语言模型": "large language model", "机器学习": "machine learning",
+    }
+    en_parts: list[str] = []
+    remaining = text
+    for cn, en in sorted(_CN_TO_EN.items(), key=lambda x: -len(x[0])):
+        if cn in remaining:
+            en_parts.append(en)
+            remaining = remaining.replace(cn, "", 1)
+    return " ".join(en_parts[:8]) if en_parts else text[:60]
 
 
 class WebRetriever:
@@ -34,37 +65,80 @@ class WebRetriever:
     async def search_semantic_scholar(
         self, query: str, limit: int = 10
     ) -> list[dict[str, Any]]:
-        resp = await self._s2_client.get(
-            "/paper/search",
-            params={
-                "query": query,
-                "limit": limit,
-                "fields": "paperId,title,abstract,authors,year,citationCount,externalIds",
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        await asyncio.sleep(REQUEST_DELAY)
-
-        results: list[dict[str, Any]] = []
-        for paper in data.get("data", []):
-            results.append(_normalize_s2(paper))
-        return results
+        logger.info("[WebRetriever] S2 query: %r", query[:80])
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                resp = await self._s2_client.get(
+                    "/paper/search",
+                    params={
+                        "query": query,
+                        "limit": limit,
+                        "fields": "paperId,title,abstract,authors,year,citationCount,externalIds",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                await asyncio.sleep(REQUEST_DELAY)
+                results = [_normalize_s2(p) for p in data.get("data", [])]
+                logger.info("[WebRetriever] S2 returned %d papers", len(results))
+                return results
+            except httpx.HTTPStatusError as exc:
+                is_rate_limit = exc.response.status_code == 429
+                if is_rate_limit:
+                    # Respect Retry-After header when available
+                    retry_after = exc.response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            delay = max(float(retry_after), _RATE_LIMIT_BACKOFF)
+                        except ValueError:
+                            delay = _RATE_LIMIT_BACKOFF * (attempt + 1)
+                    else:
+                        delay = _RATE_LIMIT_BACKOFF * (attempt + 1)
+                else:
+                    delay = REQUEST_DELAY * (attempt + 1)
+                logger.warning(
+                    "[WebRetriever] S2 attempt %d/%d failed (%d): backoff %.0fs",
+                    attempt + 1, _MAX_RETRIES + 1, exc.response.status_code, delay,
+                )
+                if attempt < _MAX_RETRIES:
+                    await asyncio.sleep(delay)
+            except Exception as exc:
+                logger.warning(
+                    "[WebRetriever] S2 attempt %d/%d failed: %s",
+                    attempt + 1, _MAX_RETRIES + 1, exc,
+                )
+                if attempt < _MAX_RETRIES:
+                    await asyncio.sleep(REQUEST_DELAY * (attempt + 1))
+        return []
 
     async def search_arxiv(
         self, query: str, limit: int = 10
     ) -> list[dict[str, Any]]:
-        resp = await self._arxiv_client.get(
-            ARXIV_API_BASE,
-            params={
-                "search_query": f"all:{query}",
-                "start": 0,
-                "max_results": limit,
-            },
-        )
-        resp.raise_for_status()
-        await asyncio.sleep(REQUEST_DELAY)
-        return _parse_arxiv_atom(resp.text)
+        en_query = _extract_english_keywords(query)
+        logger.info("[WebRetriever] arXiv query: %r (original: %r)", en_query, query[:60])
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                resp = await self._arxiv_client.get(
+                    ARXIV_API_BASE,
+                    params={
+                        "search_query": f"all:{en_query}",
+                        "start": 0,
+                        "max_results": limit,
+                    },
+                )
+                resp.raise_for_status()
+                await asyncio.sleep(REQUEST_DELAY)
+                results = _parse_arxiv_atom(resp.text)
+                logger.info("[WebRetriever] arXiv returned %d papers", len(results))
+                return results
+            except Exception as exc:
+                logger.warning(
+                    "[WebRetriever] arXiv attempt %d/%d failed: %s",
+                    attempt + 1, _MAX_RETRIES + 1, exc,
+                )
+                if attempt < _MAX_RETRIES:
+                    await asyncio.sleep(REQUEST_DELAY * (attempt + 1))
+        return []
 
 
 def _normalize_s2(paper: dict[str, Any]) -> dict[str, Any]:
