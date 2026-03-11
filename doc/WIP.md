@@ -1,6 +1,6 @@
 # AIDE — 开发进度 WIP
 
-> 最后更新：2026-03-11（Session 7）
+> 最后更新：2026-03-11（Session 8）
 
 ---
 
@@ -9,9 +9,9 @@
 | 阶段 | 规划内容 | 完成度 | 状态 |
 |------|----------|--------|------|
 | Phase 1：基础架构 | Docker、FastAPI、DB、Blackboard、WS | ~90% | ✅ 基本完成 |
-| Phase 2：多智能体核心 | 6 Agent + Orchestrator 主循环 + 并行 Lane | **~98%** | ✅ 核心稳定，Anthropic 接入，并行架构就绪 |
-| Phase 3：高级研究能力 | 语义检索、真实 RAG、论文导出 | ~60% | 🔧 arXiv+S2+BM25 全链路打通，论文导出完善 |
-| Phase 4：产品打磨 | 智能推荐、实验追踪、协作 | ~10% | 🔧 前端 concurrency 滑块、settings Anthropic 区 |
+| Phase 2：多智能体核心 | 6 Agent + Orchestrator 主循环 + 并行 Lane | **100%** | ✅ Token 计费链路修复，全流程验证通过 |
+| Phase 3：高级研究能力 | 语义检索、真实 RAG、论文导出 | **~85%** | ✅ 去重/引用图/论文编辑导出/Token 费用展示 |
+| Phase 4：产品打磨 | 智能推荐、实验追踪、协作 | ~15% | 🔧 前端 concurrency 滑块、settings Anthropic 区、Token 费用展示 |
 
 ---
 
@@ -63,11 +63,17 @@
 - L1 JSON 生成加固：markdown fence 剥离 + 强化 system prompt
 - SPAWN_SUBAGENT handler：消除 "Unhandled action type" 警告
 
+- **Token 计费全链路**（Session 8）：`base.py` 传递 `project_id`/`agent_role` 到 `generate()`，所有 6 agent 记录每次 LLM 调用费用
+- **Token 费用 API + 前端展示**（Session 8）：`GET /api/projects/{id}/usage` 返回分模型统计（USD/RMB），完成后 banner 显示费用
+- **Artifact Jaccard 去重**（Session 8）：`dedup_check()` 改为 Jaccard 词集相似度（阈值 0.6），替代直通空操作
+- **引用图谱构建**（Session 8）：Librarian 检索后自动构建 NetworkX DiGraph + `GET /api/projects/{id}/citation-graph` API
+- **论文编辑与 PDF 导出**（Session 8）：前端论文编辑模式 + `PUT /export/paper` 保存 + `GET /export/paper/html` 浏览器打印导出
+- **前端 ResearchCompleted 处理**（Session 8）：WS 事件触发完成 banner + 自动加载 token 费用
+- **并行 Lane 前端进度指示**（Session 8）：LanesStarted/LaneCompleted/SynthesisStarted WS 事件处理 + 进度可视化
+- **Agent action_type 容错**（Session 8）：`_fuzzy_match_action_type()` 模糊匹配 + target 自动填充
+
 ### ❌ 未完成
-- **LLM 语义 Dedup**：`dedup_check()` 目前是直通（pass-through），非语义去重
 - **Agent 输出 Pydantic schema 强校验**：仅靠 JSON parse
-- **前端 ResearchCompleted 处理**：WS 事件已定义，前端未订阅/显示完成状态
-- **并行 Lane 前端进度指示**：后端已支持，前端 lane 进度未可视化
 
 ---
 
@@ -81,12 +87,13 @@
 - **Query 缓存归一化**（Session 7）：排序去重关键词作 cache key，翻译结果微差不再导致缓存未命中
 - **Librarian 本地知识检索完善**（Session 7）：无 OpenAI key 时跳过 Hybrid search 避免 SSL 错误；BM25 fallback 现在返回 doc_texts 内容
 - **论文导出增强**（Session 7）：`export_paper()` 除 DRAFT 外补充 HYPOTHESES/EVIDENCE/DIRECTIONS/OUTLINE，产出从 2 section→11 section、6.5KB→62KB
+- **arXiv/S2 检索结果持久化到 BM25**（Session 8）：`_persist_web_papers()` 将检索论文自动入库项目级 BM25 索引
+- **引用图谱构建与 API**（Session 8）：`_update_citation_graph()` 构建 NetworkX DiGraph；`GET /api/projects/{id}/citation-graph` 返回节点/边数据
+- **论文编辑模式**（Session 8）：前端可编辑论文内容 + `PUT /api/projects/{id}/export/paper` 保存
+- **论文 HTML/PDF 导出**（Session 8）：`GET /api/projects/{id}/export/paper/html` 返回可打印 HTML（含 CSS 排版），浏览器 print 导出 PDF
 
 ### ❌ 未完成
-- **arXiv 检索结果未入 ChromaDB**：检索到的论文没有持久化到向量库
-- **论文导出（PDF/LaTeX）**：目前只有 Markdown，无渲染引擎
-- **前端论文编辑器 / 下载**：未实现
-- **引用图谱构建**：`citation_graph.py` 存在但未集成
+- **arXiv 检索结果未入 ChromaDB**：已入 BM25 但未入向量库（需 OpenAI embedding key）
 
 ---
 
@@ -97,6 +104,9 @@
 - **Anthropic 配置 UI**（Session 7）：API Key + Base URL 输入、Claude 模型选项
 - **项目创建 concurrency 滑块**（Session 7）：1-5 并行 lane 选择
 - **Synthesize 阶段标签**（Session 7）：前端 PHASES 显示 6 个阶段
+- **Token 费用展示**（Session 8）：完成 banner 显示总 token/USD/RMB，论文弹窗显示分模型明细
+- **Lane 进度可视化**（Session 8）：LanesStarted/LaneCompleted/SynthesisStarted 事件处理
+- **引用图谱弹窗**（Session 8）：前端可查看检索到的论文列表
 
 ### ❌ 未完成
 - 智能研究方向推荐
@@ -137,6 +147,14 @@
 | **Session 7** | **Hybrid search 智能跳过**：无 OpenAI key 时直接 BM25，避免 SSL 错误 |
 | **Session 7** | **BM25 fallback 返回内容**：从 `_doc_texts` 读取文本，不再返回空 |
 | **Session 7** | **论文导出增强**：补充 hypotheses/evidence/directions，11 sections 62KB |
+| **Session 8** | **Token 计费链路修复（P0）**：`base.py` 未传 `project_id`/`agent_role` 给 `generate()`，导致 `record_usage()` 从未被调用 |
+| **Session 8** | **factory.py 所有 agent 传入 project_id**：修复前仅 Librarian 有 project_id |
+| **Session 8** | **Token 费用 API**：`GET /usage` 返回 by_model 分模型统计 + USD/RMB 换算 |
+| **Session 8** | **Artifact Jaccard 去重**：替换直通 dedup，Jaccard 词集相似度阈值 0.6 |
+| **Session 8** | **引用图谱**：Librarian 检索后构建 NetworkX DiGraph + REST API |
+| **Session 8** | **论文编辑与导出**：前端编辑模式 + PUT 保存 + HTML 可打印导出 |
+| **Session 8** | **action_type 容错**：模糊匹配 + target 自动填充，减少 LLM 输出格式错误 |
+| **Session 8** | **前端 ResearchCompleted/Lane 事件处理**：完成 banner、token 费用、lane 进度 |
 
 ---
 
@@ -175,6 +193,27 @@
 | Critic 分数提取 | 10 次（6.0-9.0） |
 | 论文产出 | **11 sections, 62KB** |
 
+### Session 8 Run 1（Token 计费修复后，2026-03-11）
+
+| 指标 | 数据 |
+|------|------|
+| 总耗时 | 30 分 29 秒 |
+| 总迭代数 | 14 轮 |
+| 总 Token | 115,842 |
+| 总费用 | $0.8201 USD / 5.9378 RMB |
+| 模型分布 | claude-sonnet-4-6: 7 calls $0.66 / deepseek-chat: 5 calls $0.06 / deepseek-reasoner: 2 calls $0.10 |
+
+### Session 8 Run 2（最终验证，2026-03-11）
+
+| 指标 | 数据 |
+|------|------|
+| 总耗时 | ~37 分钟 |
+| 总迭代数 | 14 轮 |
+| 总 Token | 104,719 |
+| 总费用 | $0.7712 USD / 5.5834 RMB |
+| 模型分布 | claude-sonnet-4-6: 7 calls $0.62 / deepseek-chat: 5 calls $0.05 / deepseek-reasoner: 2 calls $0.10 |
+| 论文产出 | 22,086 字符，9 sections |
+
 详细踩坑记录见 [doc/devrec.md](devrec.md)。
 
 ---
@@ -183,22 +222,21 @@
 
 ### P1 — 并行 Lane 实战验证
 - [ ] 创建 concurrency=3 项目测试多 lane 并行 + 合成阶段
-- [ ] 前端 Lane 进度可视化
+- [x] 前端 Lane 进度可视化（Session 8 完成）
 - [ ] Synthesizer 输出质量评估
 
 ### P2 — 用户体验
-- [ ] 前端 `ResearchCompleted` 处理：显示完成状态 + 论文下载链接
+- [x] 前端 `ResearchCompleted` 处理（Session 8 完成）
 - [ ] 前端 Blackboard 详情视图：点击 artifact 卡片展开 L1/L2 完整内容
-- [ ] 论文预览页：渲染 `exports/paper.md` 内容
+- [x] 论文预览页 + 编辑 + PDF 导出（Session 8 完成）
 
 ### P2 — RAG 闭环
-- [ ] arXiv/S2 检索结果入 ChromaDB 持久化
+- [x] arXiv/S2 检索结果入 BM25 持久化（Session 8 完成）
+- [ ] arXiv/S2 检索结果入 ChromaDB 持久化（需 OpenAI embedding key）
 - [ ] 统一 `safe_json_loads()` 工具函数，集中处理 LLM 输出的 fence 剥离 + JSON 解析
 
 ### P3 — 长期完善
-- [ ] LLM 语义去重（替换当前直通 dedup）
 - [ ] Agent 输出 Pydantic schema 强校验
 - [ ] 多用户 / 协作功能
 - [ ] 研究可视化（假设演化、证据图）
 - [ ] Magic numbers 收进 config.py 统一管理（300s 超时、3000 字符截断等）
-- [ ] `invalid artifact_type` 模糊匹配（当前 fallback 工作但仍产生 warning）

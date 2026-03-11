@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from backend.agents.base import BaseAgent
 from backend.agents.subagent import SubAgentPool
 from backend.knowledge.trend_extractor import TrendExtractor
+from backend.llm.tracker import TokenTracker
 from backend.orchestrator.backtrack import BacktrackController
 from backend.orchestrator.convergence import ConvergenceDetector
 from backend.orchestrator.heartbeat import HeartbeatMonitor
@@ -114,6 +115,7 @@ class OrchestrationEngine:
         ws_broadcast: WSBroadcast,
         on_phase_change: PhaseChangeCallback | None = None,
         trend_extractor: TrendExtractor | None = None,
+        token_tracker: TokenTracker | None = None,
     ) -> None:
         self._project_id = project_id
         self._board = board
@@ -127,6 +129,7 @@ class OrchestrationEngine:
         self._on_phase_change = on_phase_change
         self._subagent_pool: SubAgentPool | None = None
         self._trend_extractor = trend_extractor
+        self._token_tracker = token_tracker
 
         self._running = False
         self._phase = ResearchPhase.EXPLORE
@@ -416,7 +419,7 @@ class OrchestrationEngine:
     # ------------------------------------------------------------------
 
     async def _on_research_complete(self) -> None:
-        """Clean up open challenges, export paper, and notify frontend."""
+        """Clean up open challenges, export paper, report token usage, and notify frontend."""
         try:
             remaining = await self._board.get_open_challenges()
             for ch in remaining:
@@ -430,11 +433,28 @@ class OrchestrationEngine:
                 )
 
             paper_path = await self._board.export_paper()
+
+            # Collect token usage summary
+            token_usage: dict[str, Any] | None = None
+            if self._token_tracker:
+                try:
+                    token_usage = await self._token_tracker.get_project_usage(self._project_id)
+                    logger.info(
+                        "[Engine] Token usage: %d tokens, $%.4f USD / %.4f RMB, %d calls",
+                        token_usage.get("total_tokens", 0),
+                        token_usage.get("total_cost_usd", 0),
+                        token_usage.get("total_cost_rmb", 0),
+                        token_usage.get("total_calls", 0),
+                    )
+                except Exception:
+                    logger.exception("[Engine] Failed to collect token usage")
+
             await self._ws_broadcast(
                 "ResearchCompleted",
                 {
                     "phase": ResearchPhase.COMPLETE.value,
                     "paper_path": str(paper_path) if paper_path else None,
+                    "token_usage": token_usage,
                 },
             )
             logger.info("[Engine] Research completed. Paper at %s", paper_path)

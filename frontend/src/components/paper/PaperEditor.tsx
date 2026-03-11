@@ -50,7 +50,7 @@ export default function PaperEditor({
     "idle"
   );
   const [selectedSection, setSelectedSection] = useState<string | null>(null);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const sections = extractSections(content);
 

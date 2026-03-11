@@ -270,6 +270,62 @@ async def resume_project(
     return project
 
 
+@router.get("/{project_id}/citation-graph")
+async def get_citation_graph(
+    project_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Return citation graph data for visualization."""
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    from backend.knowledge.citation_graph import CitationGraph
+
+    graph_path = str(settings.project_path(str(project_id)) / "citation_graph.json")
+    graph = CitationGraph(persist_path=graph_path)
+    graph.load()
+
+    nodes = []
+    for node_id in graph.graph.nodes():
+        data = dict(graph.graph.nodes[node_id])
+        data["id"] = node_id
+        data["citation_count"] = data.get("citation_count", graph.graph.in_degree(node_id))
+        nodes.append(data)
+
+    edges = [
+        {"source": u, "target": v}
+        for u, v in graph.graph.edges()
+    ]
+
+    most_cited = graph.get_most_cited(5) if nodes else []
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "most_cited": most_cited,
+        "total_papers": len(nodes),
+    }
+
+
+@router.get("/{project_id}/usage")
+async def get_project_usage(
+    project_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Return token usage and cost summary for a project."""
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    from backend.llm.tracker import TokenTracker
+    from backend.models import async_session_factory
+
+    tracker = TokenTracker(async_session_factory)
+    usage = await tracker.get_project_usage(str(project_id))
+    return usage
+
+
 @router.get("/{project_id}/export/paper")
 async def get_exported_paper(
     project_id: uuid.UUID,
@@ -286,6 +342,28 @@ async def get_exported_paper(
 
     content = paper_path.read_text(encoding="utf-8")
     return {"content": content, "filename": "paper.md"}
+
+
+class PaperUpdateBody(BaseModel):
+    content: str
+
+
+@router.put("/{project_id}/export/paper")
+async def save_paper_content(
+    project_id: uuid.UUID,
+    body: PaperUpdateBody,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Save edited paper content back to filesystem."""
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    exports_dir = settings.project_path(str(project_id)) / "exports"
+    exports_dir.mkdir(parents=True, exist_ok=True)
+    paper_path = exports_dir / "paper.md"
+    paper_path.write_text(body.content, encoding="utf-8")
+    return {"saved": True}
 
 
 @router.get("/{project_id}/export/paper/download")
@@ -307,3 +385,116 @@ async def download_exported_paper(
         filename=f"{project.name}_paper.md",
         media_type="text/markdown",
     )
+
+
+@router.get("/{project_id}/export/paper/html")
+async def get_paper_html(
+    project_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Return paper as HTML for PDF printing in browser."""
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    paper_path = settings.project_path(str(project_id)) / "exports" / "paper.md"
+    if not paper_path.exists():
+        raise HTTPException(404, "Paper not yet exported")
+
+    md_content = paper_path.read_text(encoding="utf-8")
+    html = _markdown_to_html(md_content, project.name)
+    return {"html": html, "title": project.name}
+
+
+def _markdown_to_html(md_content: str, title: str) -> str:
+    """Convert markdown to a self-contained HTML document suitable for PDF printing."""
+    import re
+
+    lines = md_content.split("\n")
+    html_parts: list[str] = []
+    in_code = False
+
+    for line in lines:
+        if line.startswith("```"):
+            if in_code:
+                html_parts.append("</code></pre>")
+                in_code = False
+            else:
+                html_parts.append("<pre><code>")
+                in_code = True
+            continue
+        if in_code:
+            html_parts.append(_escape_html(line))
+            continue
+
+        # Headings
+        m = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if m:
+            level = len(m.group(1))
+            text = _inline_format(m.group(2))
+            html_parts.append(f"<h{level}>{text}</h{level}>")
+            continue
+
+        # Horizontal rule
+        if re.match(r"^---+$", line.strip()):
+            html_parts.append("<hr>")
+            continue
+
+        # List items
+        m = re.match(r"^(\s*)-\s+(.+)$", line)
+        if m:
+            text = _inline_format(m.group(2))
+            html_parts.append(f"<li>{text}</li>")
+            continue
+
+        # Empty line = paragraph break
+        if not line.strip():
+            html_parts.append("<br>")
+            continue
+
+        # Normal text
+        html_parts.append(f"<p>{_inline_format(line)}</p>")
+
+    body = "\n".join(html_parts)
+    css = (
+        "body { font-family: serif; max-width: 800px;"
+        " margin: 40px auto; padding: 0 20px;"
+        " color: #1a1a1a; line-height: 1.8; }\n"
+        "h1 { font-size: 1.8em; border-bottom: 2px solid #333;"
+        " padding-bottom: 8px; margin-top: 40px; }\n"
+        "h2 { font-size: 1.4em; margin-top: 32px; }\n"
+        "h3 { font-size: 1.15em; margin-top: 24px; }\n"
+        "p { margin: 8px 0; text-align: justify; }\n"
+        "li { margin: 4px 0; }\n"
+        "pre { background: #f5f5f5; padding: 12px;"
+        " border-radius: 4px; overflow-x: auto; }\n"
+        "code { font-family: monospace; }\n"
+        "hr { border: none; border-top: 1px solid #ddd;"
+        " margin: 24px 0; }\n"
+        "@media print { body { margin: 0; padding: 20px; } }"
+    )
+    safe_title = _escape_html(title)
+    return (
+        "<!DOCTYPE html>\n"
+        '<html lang="zh-CN">\n<head>\n'
+        '<meta charset="utf-8">\n'
+        f"<title>{safe_title}</title>\n"
+        f"<style>\n{css}\n</style>\n"
+        f"</head>\n<body>\n{body}\n</body>\n</html>"
+    )
+
+
+def _escape_html(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _inline_format(text: str) -> str:
+    """Apply inline markdown formatting (bold, italic, code, links)."""
+    import re
+
+    text = _escape_html(text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"\*(.+?)\*", r"<em>\1</em>", text)
+    text = re.sub(r"`(.+?)`", r"<code>\1</code>", text)
+    text = re.sub(r"\[(.+?)\]\((.+?)\)", r'<a href="\2">\1</a>', text)
+    return text

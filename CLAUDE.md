@@ -48,16 +48,16 @@ Frontend (Next.js) ↔ WebSocket/REST ↔ FastAPI Backend
                                     (factory.py wires all deps)
                                               ↓
                       ┌──────────────────────────────────────┐
-                      │  5 Agents read/write shared Blackboard│
+                      │  6 Agents read/write shared Blackboard│
                       │  Director, Scientist, Librarian,      │
-                      │  Writer, Critic                       │
+                      │  Writer, Critic, Synthesizer          │
                       └──────────────────────────────────────┘
                                               ↓
                                     PostgreSQL + ChromaDB + Filesystem
 ```
 
 ### Research Phases (`backend/types.py` - `ResearchPhase`)
-`EXPLORE → HYPOTHESIZE → EVIDENCE → COMPOSE → COMPLETE`
+`EXPLORE → HYPOTHESIZE → EVIDENCE → COMPOSE → [SYNTHESIZE] → COMPLETE`
 
 The orchestrator detects convergence (via `CriticAgent` score threshold + stable rounds) to advance phases, or backtracks on contradictions.
 
@@ -77,15 +77,17 @@ The orchestrator detects convergence (via `CriticAgent` score threshold + stable
 - `levels.py` - L0/L1/L2 generation via LLM with truncation fallback
 - `actions.py` - Action executor（含 write_artifact/post_message/raise_challenge/resolve_challenge）
 
-**`backend/agents/`** - All extend `BaseAgent` (`base.py`)；构造时接收 `research_topic`，渲染 Jinja2 模板时传入
+**`backend/agents/`** - All extend `BaseAgent` (`base.py`)；构造时接收 `research_topic` 和 `project_id`，`execute()` 将两者传给 `llm_router.generate()` 实现 token 追踪
 
-**`backend/agents/prompts/*.j2`** - 所有 5 个模板（director/scientist/librarian/writer/critic）都有：
+**`backend/agents/prompts/*.j2`** - 所有 6 个模板（director/scientist/librarian/writer/critic/synthesizer）都有：
 - `{% if research_topic %}## ⚠️ RESEARCH TOPIC{% endif %}` 区块（优先于 context 展示）
 - Language Requirement 区块（要求输出简体中文）
 
-**`backend/llm/router.py`** - Unified LLM dispatch with `call()` and `generate()`; supports DeepSeek and OpenRouter providers with fallback
+**`backend/llm/router.py`** - Unified LLM dispatch with `call()` and `generate()`; supports DeepSeek, OpenRouter and Anthropic providers with fallback。`generate()` 接收 `project_id`/`agent_role` 用于 token 追踪
 
-**`backend/api/projects.py`** - `start_project` launches `OrchestrationEngine.run()` as asyncio background task; `_running_tasks: dict[str, asyncio.Task]` tracks per-project engines
+**`backend/llm/tracker.py`** - Token 用量持久化（PostgreSQL `token_usage` 表）；`get_project_usage()` 返回分模型统计（token 数、USD/RMB 费用）；`COST_PER_1K` 定义各模型单价（含 DeepSeek/Claude/GPT/Gemini）
+
+**`backend/api/projects.py`** - `start_project` launches `OrchestrationEngine.run()` as asyncio background task; `_running_tasks: dict[str, asyncio.Task]` tracks per-project engines；含 `GET /usage`（token 费用）、`GET /citation-graph`（引用图谱）、`PUT /export/paper`（保存编辑）、`GET /export/paper/html`（HTML 导出）
 
 **`backend/checkpoint/`** - Halts orchestrator at critical moments, notifies frontend via WebSocket, waits for user approval (30-min timeout)
 
@@ -197,22 +199,54 @@ All backend settings are Pydantic `BaseSettings` in `backend/config.py`, overrid
 - S2 首次请求因 429 需 ~97s（15+30+45s backoff），后续 ~1s
 - Agent 单次调用：Librarian 2-4min，Scientist ~3min，Director ~1.75min，Critic ~2.5min，Writer ~2.25min
 
+### Session 8（2026-03-11）— Token 计费修复 + Phase 2/3 收尾
+
+#### P0 — Token 计费链路（修复前所有项目费用显示 0）
+30. **`backend/agents/base.py`**：`execute()` 调用 `generate()` 时未传 `project_id`/`agent_role`，导致 `router.py` 的 `record_usage()` 从未被调用。修复：传递 `project_id=self._project_id, agent_role=self.role`。Protocol 定义同步更新。
+31. **`backend/orchestrator/factory.py`**：6 个 agent 中仅 Librarian 传了 `project_id`，其余 5 个为空字符串。修复：所有 agent 构造时传入 `project_id=str(project_id)`。
+32. **`backend/agents/subagent.py`**：Protocol 定义同步更新，增加 `project_id`/`agent_role` 可选参数。
+
+#### P1 — Token 费用展示
+33. **`backend/llm/tracker.py`**：`COST_PER_1K` 增加 Claude 模型族（opus/sonnet/haiku）定价；`_resolve_cost_key()` 智能识别模型族；`get_project_usage()` 返回 `total_cost_rmb`（USD*7.24）、分模型明细。
+34. **`backend/orchestrator/engine.py`**：`_on_research_complete()` 收集 token usage 并通过 `ResearchCompleted` WS 事件广播。
+35. **`backend/api/projects.py`**：新增 `GET /{id}/usage` 端点返回 token 费用。
+36. **前端项目详情页**：完成 banner 显示总 token/USD/RMB；论文弹窗显示分模型明细表。
+
+#### P1 — Artifact 去重
+37. **`backend/blackboard/board.py`**：`dedup_check()` 从直通空操作改为 Jaccard 词集相似度（阈值 0.6），对比最近 10 条同类 artifact，重复则跳过写入。
+
+#### P1 — 引用图谱
+38. **`backend/agents/librarian.py`**：`_persist_web_papers()` 将检索论文入库 BM25 索引；`_update_citation_graph()` 构建 NetworkX DiGraph。
+39. **`backend/api/projects.py`**：新增 `GET /{id}/citation-graph` 端点。
+
+#### P1 — 论文编辑与导出
+40. **`backend/api/projects.py`**：新增 `PUT /{id}/export/paper`（保存编辑内容）、`GET /{id}/export/paper/html`（HTML 可打印导出），含 `_markdown_to_html()` 转换。
+41. **前端项目详情页**：论文编辑模式（edit/save/cancel）+ PDF 导出（浏览器 window.print）。
+
+#### P1 — Agent 输出容错
+42. **`backend/agents/base.py`**：`_parse_response()` 增加 `_fuzzy_match_action_type()` 模糊匹配（处理 LLM 输出的非标准 action_type）+ target 自动填充。
+
+#### P2 — 前端 WS 事件处理
+43. **前端项目详情页**：处理 `ResearchCompleted`（完成 banner + 自动加载 token）、`LanesStarted`/`LaneCompleted`/`SynthesisStarted`（lane 进度可视化）。
+
+#### 性能实测数据（2 次完整运行）
+- **Run 1**（课题 "RAG optimization"）：14 轮 ~30min，115,842 tokens，$0.82 / 5.94 RMB
+- **Run 2**（课题 "Knowledge distillation"）：14 轮 ~37min，104,719 tokens，$0.77 / 5.58 RMB
+- 两次运行均 4 阶段全部 critic 收敛通过，token 数据完整写入 DB，项目间完全隔离
+
 ---
 
 ## 已知未完成 / 待改进项
-
-### 高优先级（P2 功能）
-- **Librarian 本地知识检索内容缺失**：BM25 fallback 只返回 doc_id+score，不返回 content（`BM25Store` 的 `query()` 不返回文本）。需要在 fallback 中用 doc_id 反查 `_doc_texts` 或改 `BM25Store.query()` 返回文本。
-- **dedup_check 是空操作**：`board.py` 注释写明"dedup requires embedding service"，ChromaDB 虽运行但未集成到去重逻辑。
-- **前端缺少论文导出入口**：`exports/paper.md` 已生成但前端无下载/预览 UI，`ResearchCompleted` WS 事件未处理。
 
 ### 中优先级
 - **Planner 是纯规则轮转**：Agent 顺序固定，无法根据研究进展动态调整（`llm_router` 仅保留接口兼容性）。
 - **偏题检查是关键词匹配**：`_check_on_topic()` 用字符串匹配，不做语义理解。
 - **前端 Blackboard 详情视图**：当前只展示 L0 摘要卡片，未实现点击展开 L1/L2 完整内容。
 - **WriteBackGuard 效果待验证**：降噪已做（fence 剥离 + 截断），但实际是否产生有价值的 write-back artifact 未确认。
+- **arXiv/S2 检索结果未入 ChromaDB**：已入 BM25 但未入向量库（需 OpenAI embedding key）。
 
 ### 低优先级
 - **Challenge 处理**：自动 dismiss（>2 iters）已实现，但未测试完整 raise→respond→resolve 流程。
 - **`adapter.py` 可能是死代码**：`factory.py` 直接使用 `Blackboard`，`BoardAdapter` 可能无存在意义。
 - **Agent 超时 300s**：实测中未触发超时，但 Librarian 含 S2 重试时理论可达 ~4min，接近阈值。
+- **统一 `safe_json_loads()`**：fence 剥离 + JSON 解析散落各处，应集中为工具函数。

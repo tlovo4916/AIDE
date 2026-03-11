@@ -391,8 +391,73 @@ class Blackboard:
         await self._action_executor.execute(action, self)
 
     async def dedup_check(self, actions: list[BlackboardAction]) -> list[BlackboardAction]:
-        """Pass through all actions (dedup requires embedding service, skip when unavailable)."""
-        return actions
+        """Filter out duplicate write_artifact actions using text similarity."""
+        from backend.types import ActionType
+
+        result: list[BlackboardAction] = []
+        for action in actions:
+            if action.action_type != ActionType.WRITE_ARTIFACT:
+                result.append(action)
+                continue
+            text = self._extract_action_text(action)
+            if not text or len(text) < 30:
+                result.append(action)
+                continue
+            art_type_str = action.content.get("artifact_type", action.target)
+            try:
+                art_type = ArtifactType(art_type_str)
+            except ValueError:
+                result.append(action)
+                continue
+            if await self._is_duplicate(art_type, text):
+                logger.info(
+                    "[Blackboard] Dedup: skipping duplicate %s artifact (%.40s...)",
+                    art_type.value,
+                    text,
+                )
+                continue
+            result.append(action)
+        return result
+
+    @staticmethod
+    def _extract_action_text(action: BlackboardAction) -> str:
+        """Extract primary text content from action for dedup comparison."""
+        c = action.content
+        for key in ("text", "content", "hypothesis", "body", "section", "summary"):
+            val = c.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        if isinstance(c.get("findings"), list):
+            return " ".join(str(f) for f in c["findings"])
+        return ""
+
+    async def _is_duplicate(
+        self, art_type: ArtifactType, new_text: str, threshold: float = 0.6,
+    ) -> bool:
+        """Check if new_text is too similar to any existing artifact of the same type."""
+        existing = await self.list_artifacts(art_type)
+        if not existing:
+            return False
+        new_words = set(new_text.lower().split())
+        if len(new_words) < 5:
+            return False
+        for meta in existing[-10:]:
+            ver = await self.get_latest_version(art_type, meta.artifact_id)
+            if ver == 0:
+                continue
+            content = await self.read_artifact(art_type, meta.artifact_id, ver, ContextLevel.L2)
+            if not content:
+                continue
+            existing_text = content if isinstance(content, str) else json.dumps(content)
+            existing_words = set(existing_text.lower().split())
+            if not existing_words:
+                continue
+            intersection = new_words & existing_words
+            union = new_words | existing_words
+            jaccard = len(intersection) / len(union) if union else 0
+            if jaccard >= threshold:
+                return True
+        return False
 
     async def get_open_challenge_count(self) -> int:
         return len(await self.get_open_challenges())

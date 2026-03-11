@@ -34,6 +34,12 @@ import {
   resumeProject,
   deleteProject,
   getExportedPaper,
+  getProjectUsage,
+  getPaperHtml,
+  savePaperContent,
+  getCitationGraph,
+  type ProjectTokenUsage,
+  type CitationGraphData,
 } from "@/lib/api";
 import { PapersPanel } from "@/components/papers-panel";
 import { useTypedWebSocket } from "@/hooks/useTypedWebSocket";
@@ -497,13 +503,30 @@ export default function ProjectPage() {
   const [deleting, setDeleting] = useState(false);
   const [paperContent, setPaperContent] = useState<string | null>(null);
   const [showPaperModal, setShowPaperModal] = useState(false);
+  const [paperEditing, setPaperEditing] = useState(false);
+  const [paperEditContent, setPaperEditContent] = useState("");
+  const [paperSaving, setPaperSaving] = useState(false);
+  const [tokenUsage, setTokenUsage] = useState<ProjectTokenUsage | null>(null);
+  const [citationGraph, setCitationGraph] = useState<CitationGraphData | null>(null);
+  const [showCitationGraph, setShowCitationGraph] = useState(false);
+  const [laneState, setLaneState] = useState<{
+    total: number;
+    completed: number[];
+    errors: number[];
+    synthesizing: boolean;
+  } | null>(null);
 
   const ws = useTypedWebSocket(projectId);
   const blackboard = useBlackboard(ws, projectId);
 
   useEffect(() => {
     getProject(projectId)
-      .then(setProject)
+      .then((p) => {
+        setProject(p);
+        if (p.status === "completed") {
+          getProjectUsage(projectId).then(setTokenUsage).catch(() => {});
+        }
+      })
       .catch(() => setProject(null))
       .finally(() => setLoading(false));
   }, [projectId]);
@@ -556,8 +579,39 @@ export default function ProjectPage() {
         // 5 秒后自动隐藏
         setTimeout(() => setTopicDriftWarning(null), 8_000);
       }),
-      ws.subscribe("ResearchCompleted", () => {
+      ws.subscribe("LanesStarted", (payload) => {
+        setLaneState({
+          total: payload.num_lanes,
+          completed: [],
+          errors: [],
+          synthesizing: false,
+        });
+      }),
+      ws.subscribe("LaneCompleted", (payload) => {
+        setLaneState((prev) => {
+          if (!prev) return prev;
+          const completed = [...prev.completed];
+          const errors = [...prev.errors];
+          if (payload.error) {
+            if (!errors.includes(payload.lane)) errors.push(payload.lane);
+          } else {
+            if (!completed.includes(payload.lane)) completed.push(payload.lane);
+          }
+          return { ...prev, completed, errors };
+        });
+      }),
+      ws.subscribe("SynthesisStarted", () => {
+        setLaneState((prev) => prev ? { ...prev, synthesizing: true } : prev);
+      }),
+      ws.subscribe("ResearchCompleted", (payload) => {
         setProject((prev) => prev ? { ...prev, status: "completed", phase: "complete" } : prev);
+        // Capture token usage from WS event
+        if (payload.token_usage) {
+          setTokenUsage(payload.token_usage as unknown as ProjectTokenUsage);
+        } else {
+          // Fallback: fetch from API
+          getProjectUsage(projectId).then(setTokenUsage).catch(() => {});
+        }
         // Auto-load paper content
         getExportedPaper(projectId)
           .then((data) => {
@@ -711,14 +765,35 @@ export default function ProjectPage() {
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={async () => {
+              try {
+                const data = await getCitationGraph(projectId);
+                if (data.total_papers > 0) {
+                  setCitationGraph(data);
+                  setShowCitationGraph(true);
+                }
+              } catch { /* no graph yet */ }
+            }}
+            title="引用图谱"
+          >
+            <TrendingUp className="mr-1.5 h-3.5 w-3.5" />
+            引用图谱
+          </Button>
           {project.status === "completed" && (
             <Button
               variant="secondary"
               size="sm"
               onClick={async () => {
                 try {
-                  const data = await getExportedPaper(projectId);
+                  const [data, usage] = await Promise.all([
+                    getExportedPaper(projectId),
+                    getProjectUsage(projectId).catch(() => null),
+                  ]);
                   setPaperContent(data.content);
+                  if (usage) setTokenUsage(usage);
                   setShowPaperModal(true);
                 } catch {
                   /* paper not available */
@@ -782,6 +857,68 @@ export default function ProjectPage() {
             )}
           </div>
           <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-aide-accent-blue" />
+        </div>
+      )}
+
+      {/* 并行 Lane 进度 */}
+      {laneState && laneState.total > 1 && (
+        <div className="mb-4 rounded-lg border border-aide-border bg-aide-bg-secondary px-4 py-3">
+          <div className="flex items-center gap-2 mb-2">
+            <TrendingUp className="h-4 w-4 text-aide-accent-blue" />
+            <span className="text-sm font-medium text-aide-text-primary">
+              {laneState.synthesizing
+                ? "综合分析中..."
+                : `并行研究 Lane (${laneState.completed.length + laneState.errors.length}/${laneState.total})`}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            {Array.from({ length: laneState.total }, (_, i) => {
+              const isDone = laneState.completed.includes(i);
+              const isError = laneState.errors.includes(i);
+              return (
+                <div
+                  key={i}
+                  className={`flex-1 rounded-md px-3 py-2 text-center text-xs ${
+                    isDone
+                      ? "bg-aide-accent-green/15 text-aide-accent-green"
+                      : isError
+                        ? "bg-red-500/15 text-red-400"
+                        : "bg-aide-accent-blue/10 text-aide-accent-blue"
+                  }`}
+                >
+                  <span className="font-medium">Lane {i}</span>
+                  <span className="ml-1.5">
+                    {isDone ? "done" : isError ? "error" : "running"}
+                  </span>
+                  {!isDone && !isError && (
+                    <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 研究完成横幅 */}
+      {project.status === "completed" && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-aide-accent-green/30 bg-aide-accent-green/5 px-4 py-3">
+          <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-aide-accent-green" />
+          <div className="flex flex-1 items-center gap-2 min-w-0">
+            <span className="text-sm font-medium text-aide-accent-green">研究已完成</span>
+            {tokenUsage && (
+              <>
+                <span className="text-aide-text-muted">·</span>
+                <span className="text-sm text-aide-text-secondary">
+                  {tokenUsage.total_tokens.toLocaleString()} tokens
+                </span>
+                <span className="text-aide-text-muted">·</span>
+                <span className="text-sm text-aide-accent-blue">${tokenUsage.total_cost_usd.toFixed(4)}</span>
+                <span className="text-aide-text-muted">/</span>
+                <span className="text-sm text-aide-accent-green">¥{tokenUsage.total_cost_rmb.toFixed(4)}</span>
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -957,6 +1094,60 @@ export default function ProjectPage() {
         )}
       </Modal>
 
+      {/* Citation Graph Modal */}
+      <Modal
+        isOpen={showCitationGraph}
+        onClose={() => setShowCitationGraph(false)}
+        title="引用图谱"
+      >
+        {citationGraph && citationGraph.total_papers > 0 ? (
+          <div className="space-y-4">
+            <div className="text-xs text-aide-text-muted">
+              共 {citationGraph.total_papers} 篇论文
+              {citationGraph.edges.length > 0 && ` / ${citationGraph.edges.length} 条引用关系`}
+            </div>
+            <div className="rounded-md border border-aide-border bg-aide-bg-tertiary p-3 max-h-[50vh] overflow-y-auto">
+              <div className="space-y-2">
+                {citationGraph.nodes.map((node) => (
+                  <div
+                    key={node.id}
+                    className={`rounded-md px-3 py-2 text-xs ${
+                      citationGraph.most_cited.includes(node.id)
+                        ? "bg-aide-accent-blue/10 border border-aide-accent-blue/30"
+                        : "bg-aide-bg-secondary"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-aide-text-primary truncate max-w-[80%]">
+                        {node.title || node.id}
+                      </span>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {node.year && <span className="text-aide-text-muted">{node.year}</span>}
+                        <Badge variant="phase">{node.source || "web"}</Badge>
+                      </div>
+                    </div>
+                    {node.authors && (
+                      <p className="mt-1 text-aide-text-muted truncate">{node.authors}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                variant="ghost"
+                size="md"
+                onClick={() => setShowCitationGraph(false)}
+              >
+                关闭
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-aide-text-muted">暂无引用数据</p>
+        )}
+      </Modal>
+
       {/* Paper Preview Modal */}
       <Modal
         isOpen={showPaperModal}
@@ -965,26 +1156,138 @@ export default function ProjectPage() {
       >
         {paperContent && (
           <div className="space-y-4">
-            <div className="max-h-[60vh] overflow-y-auto rounded-md border border-aide-border bg-aide-bg-tertiary p-4">
-              <Markdown className="md-content">{paperContent}</Markdown>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button
-                variant="ghost"
-                size="md"
-                onClick={() => setShowPaperModal(false)}
-              >
-                关闭
-              </Button>
-              <a
-                href={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/projects/${projectId}/export/paper/download`}
-                download
-              >
-                <Button variant="primary" size="md">
-                  <Download className="mr-2 h-4 w-4" />
-                  下载 Markdown
+            {/* Token Usage Summary */}
+            {tokenUsage && (
+              <div className="rounded-md border border-aide-border bg-aide-bg-tertiary p-4">
+                <h4 className="mb-3 text-sm font-semibold text-aide-text-primary">Token 用量统计</h4>
+                <div className="grid grid-cols-4 gap-3 text-xs">
+                  <div className="rounded-md bg-aide-bg-secondary p-2.5">
+                    <p className="text-aide-text-muted">总 Token</p>
+                    <p className="mt-1 text-base font-semibold text-aide-text-primary">
+                      {tokenUsage.total_tokens.toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="rounded-md bg-aide-bg-secondary p-2.5">
+                    <p className="text-aide-text-muted">调用次数</p>
+                    <p className="mt-1 text-base font-semibold text-aide-text-primary">
+                      {tokenUsage.total_calls}
+                    </p>
+                  </div>
+                  <div className="rounded-md bg-aide-bg-secondary p-2.5">
+                    <p className="text-aide-text-muted">费用 (USD)</p>
+                    <p className="mt-1 text-base font-semibold text-aide-accent-blue">
+                      ${tokenUsage.total_cost_usd.toFixed(4)}
+                    </p>
+                  </div>
+                  <div className="rounded-md bg-aide-bg-secondary p-2.5">
+                    <p className="text-aide-text-muted">费用 (RMB)</p>
+                    <p className="mt-1 text-base font-semibold text-aide-accent-green">
+                      ¥{tokenUsage.total_cost_rmb.toFixed(4)}
+                    </p>
+                  </div>
+                </div>
+                {/* Per-model breakdown */}
+                <div className="mt-3 space-y-1">
+                  {Object.entries(tokenUsage.by_model).map(([model, info]) => (
+                    <div key={model} className="flex items-center justify-between text-xs text-aide-text-secondary">
+                      <span className="font-mono">{model}</span>
+                      <span>
+                        {info.total_tokens.toLocaleString()} tokens / {info.calls} calls / ${info.cost_usd.toFixed(4)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {paperEditing ? (
+              <textarea
+                className="h-[60vh] w-full rounded-md border border-aide-border bg-aide-bg-tertiary p-4 font-mono text-sm text-aide-text-primary resize-none focus:outline-none focus:ring-1 focus:ring-aide-accent-blue"
+                value={paperEditContent}
+                onChange={(e) => setPaperEditContent(e.target.value)}
+              />
+            ) : (
+              <div className="max-h-[60vh] overflow-y-auto rounded-md border border-aide-border bg-aide-bg-tertiary p-4">
+                <Markdown className="md-content">{paperContent}</Markdown>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <div className="flex gap-2">
+                <Button
+                  variant={paperEditing ? "primary" : "secondary"}
+                  size="md"
+                  onClick={() => {
+                    if (paperEditing) {
+                      setPaperSaving(true);
+                      savePaperContent(projectId, paperEditContent)
+                        .then(() => {
+                          setPaperContent(paperEditContent);
+                          setPaperEditing(false);
+                        })
+                        .catch(() => {})
+                        .finally(() => setPaperSaving(false));
+                    } else {
+                      setPaperEditContent(paperContent || "");
+                      setPaperEditing(true);
+                    }
+                  }}
+                  disabled={paperSaving}
+                >
+                  {paperSaving ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <PenTool className="mr-2 h-4 w-4" />
+                  )}
+                  {paperEditing ? "保存" : "编辑"}
                 </Button>
-              </a>
+                {paperEditing && (
+                  <Button
+                    variant="ghost"
+                    size="md"
+                    onClick={() => setPaperEditing(false)}
+                  >
+                    取消
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  size="md"
+                  onClick={() => {
+                    setShowPaperModal(false);
+                    setPaperEditing(false);
+                  }}
+                >
+                  关闭
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="md"
+                  onClick={async () => {
+                    try {
+                      const { html } = await getPaperHtml(projectId);
+                      const w = window.open("", "_blank");
+                      if (w) {
+                        w.document.write(html);
+                        w.document.close();
+                        setTimeout(() => w.print(), 500);
+                      }
+                    } catch { /* fallback: ignore */ }
+                  }}
+                >
+                  <FileText className="mr-2 h-4 w-4" />
+                  导出 PDF
+                </Button>
+                <a
+                  href={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/projects/${projectId}/export/paper/download`}
+                  download
+                >
+                  <Button variant="primary" size="md">
+                    <Download className="mr-2 h-4 w-4" />
+                    下载 MD
+                  </Button>
+                </a>
+              </div>
             </div>
           </div>
         )}

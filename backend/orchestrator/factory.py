@@ -117,7 +117,8 @@ async def _create_engine(
         research_topic[:80],
     )
 
-    llm_router = LLMRouter(tracker=TokenTracker(async_session_factory))
+    token_tracker = TokenTracker(async_session_factory)
+    llm_router = LLMRouter(tracker=token_tracker)
     action_executor = ActionExecutor()
 
     async def llm_call(messages: list[dict[str, str]]) -> str:
@@ -135,11 +136,13 @@ async def _create_engine(
             llm_router,
             write_back_guard,
             research_topic=research_topic,
+            project_id=str(project_id),
         ),
         AgentRole.SCIENTIST: ScientistAgent(
             llm_router,
             write_back_guard,
             research_topic=research_topic,
+            project_id=str(project_id),
         ),
         AgentRole.LIBRARIAN: LibrarianAgent(
             llm_router,
@@ -151,16 +154,19 @@ async def _create_engine(
             llm_router,
             write_back_guard,
             research_topic=research_topic,
+            project_id=str(project_id),
         ),
         AgentRole.CRITIC: CriticAgent(
             llm_router,
             write_back_guard,
             research_topic=research_topic,
+            project_id=str(project_id),
         ),
         AgentRole.SYNTHESIZER: SynthesizerAgent(
             llm_router,
             write_back_guard,
             research_topic=research_topic,
+            project_id=str(project_id),
         ),
     }
 
@@ -201,6 +207,7 @@ async def _create_engine(
         ws_broadcast=_build_ws_broadcast(project_id),
         on_phase_change=_on_phase_change,
         trend_extractor=trend_extractor,
+        token_tracker=token_tracker,
     )
 
     subagent_pool = SubAgentPool(llm_router)

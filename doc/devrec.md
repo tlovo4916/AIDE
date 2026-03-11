@@ -186,18 +186,54 @@ def _normalize_cache_key(query: str) -> str:
 
 ---
 
+## 10. Token 计费器始终为 0 — generate() 未传递追踪参数
+
+**现象（Session 8）**：前端 Token 费用显示全部为 0，DB 中 `token_usage` 表为空。但 `TokenTracker.record_usage()` 机制本身正常（手动调用可写入）。
+
+**根因链**：
+```
+BaseAgent.execute() 调用 self._llm_router.generate(model, prompt)
+    ↓
+generate() 签名有 project_id=None, agent_role=None（可选参数）
+    ↓
+但 execute() 没有传递这两个参数
+    ↓
+router.py:133 条件 if self._tracker and project_id and agent_role 永远为 False
+    ↓
+record_usage() 从未被调用 → token_usage 表永远为空
+```
+
+**进一步发现**：`factory.py` 构造 agent 时，仅 `LibrarianAgent` 传入了 `project_id`，其余 5 个 agent 的 `project_id` 为空字符串。
+
+**修复（4 个文件）**：
+1. `base.py`：Protocol 定义增加 `project_id`/`agent_role` 可选参数；`execute()` 传递 `project_id=self._project_id, agent_role=self.role`
+2. `librarian.py`：翻译查询的 `generate()` 调用也传入追踪参数
+3. `subagent.py`：Protocol 定义同步更新
+4. `factory.py`：所有 6 个 agent 构造时传入 `project_id=str(project_id)`
+
+**验证**：两次完整研究运行（14 轮迭代），14 次 LLM 调用全部正确记录到 DB，分模型费用计算准确。
+
+**教训**：
+- **可选参数的默认值 None 是隐形的功能开关**。`project_id=None` 作为默认值，意味着"不传就不记录"——而调用方恰好全都没传。这种 bug 不会报错，只会静默丢失数据。
+- **跨层传参链必须端到端验证**。从 `factory.py` 构造 agent → `base.py` 存储 `_project_id` → `execute()` 传给 `generate()` → `router.py` 传给 `record_usage()`，任何一环断裂都会导致功能失效。单元测试无法覆盖这种跨层问题，必须做集成测试。
+- **"只有一个地方传了参数"是强信号**。6 个 agent 中只有 Librarian 传了 `project_id`，说明其他 5 个是复制粘贴时漏掉的。
+
+---
+
 ## 性能基线对比
 
-### Session 6 vs Session 7
+### Session 6 vs Session 7 vs Session 8
 
-| 指标 | Session 6 (纯 DeepSeek) | Session 7 Run 2 (Claude+DS 混合) |
-|------|-------------------------|----------------------------------|
-| 总耗时 | 33m51s | 27m25s (**-19%**) |
-| 迭代数 | 14 | 14 |
-| non-JSON | 0 | 0 |
-| S2 429 | ~4 次 | 0 次 |
-| 论文大小 | ~6KB | **62KB (+854%)** |
-| Critic 分数范围 | 6.0-8.0 | 6.0-9.0 |
+| 指标 | Session 6 (纯 DeepSeek) | Session 7 Run 2 (Claude+DS) | Session 8 Run 2 (计费修复后) |
+|------|-------------------------|----------------------------|------------------------------|
+| 总耗时 | 33m51s | 27m25s | ~37min |
+| 迭代数 | 14 | 14 | 14 |
+| 总 Token | 未记录 | 未记录 | **104,719** |
+| 总费用 | 未记录 | 未记录 | **$0.77 / 5.58 RMB** |
+| non-JSON | 0 | 0 | 0 |
+| S2 429 | ~4 次 | 0 次 | ~4 次（首次冷启动） |
+| 论文大小 | ~6KB | 62KB | 22KB |
+| Critic 分数范围 | 6.0-8.0 | 6.0-9.0 | 7.0 |
 
 各 Agent 单次调用耗时（Session 7，Claude 混合模式）：
 
@@ -226,3 +262,5 @@ def _normalize_cache_key(query: str) -> str:
 - **fallback 代码从未被测试**：每次写 fallback 都是"写完就忘"，直到生产环境触发才发现崩溃。需要对 fallback 路径做专门的测试。
 - **Magic numbers 太多**：300s 超时、360s stale、30K token budget、3000 字符截断、5min S2 cooldown——应该全部收进 `config.py` 统一管理。
 - **不同 LLM 的适配层不够**：Claude 和 DeepSeek 对 JSON 格式指令的遵循度差异很大，当前的适配是在 `base.py` 里硬编码的 `if model.startswith("claude-")`，不够优雅。应该在 provider 层或 router 层做模型族级别的适配。
+- **可选参数默认 None 的隐形风险**（Session 8 教训）：`generate(project_id=None)` 导致计费从未触发。关键功能参数不应该用 None 默认值静默跳过，应该至少产生一条 warning 日志。
+- **跨文件复制粘贴遗漏**（Session 8 教训）：factory.py 中 6 个 agent 构造只有 1 个传了 project_id，是典型的复制粘贴遗漏。批量构造应考虑用循环或 factory 函数统一参数。

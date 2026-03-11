@@ -133,6 +133,19 @@ export function getExportedPaper(projectId: string) {
   );
 }
 
+export function getPaperHtml(projectId: string) {
+  return request<{ html: string; title: string }>(
+    `/api/projects/${projectId}/export/paper/html`
+  );
+}
+
+export function savePaperContent(projectId: string, content: string) {
+  return request<void>(`/api/projects/${projectId}/export/paper`, {
+    method: "PUT",
+    body: JSON.stringify({ content }),
+  });
+}
+
 // --- Checkpoints ---
 
 export function listCheckpoints(projectId: string) {
@@ -184,14 +197,45 @@ export function getBlackboard(projectId: string) {
   }>(`/api/projects/${projectId}/blackboard`);
 }
 
+// --- Citation Graph ---
+
+export interface CitationGraphData {
+  nodes: {
+    id: string;
+    title?: string;
+    year?: number;
+    authors?: string;
+    source?: string;
+    citation_count: number;
+  }[];
+  edges: { source: string; target: string }[];
+  most_cited: string[];
+  total_papers: number;
+}
+
+export function getCitationGraph(projectId: string) {
+  return request<CitationGraphData>(`/api/projects/${projectId}/citation-graph`);
+}
+
 // --- Token Usage ---
 
-export function getTokenUsage(projectId?: string) {
-  const qs = projectId ? `?project_id=${projectId}` : "";
-  return request<{
-    total_tokens: number;
+export interface ProjectTokenUsage {
+  project_id: string;
+  by_model: Record<string, {
     prompt_tokens: number;
     completion_tokens: number;
+    total_tokens: number;
     cost_usd: number;
-  }>(`/api/usage${qs}`);
+    calls: number;
+  }>;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  total_cost_rmb: number;
+  total_calls: number;
+}
+
+export function getProjectUsage(projectId: string) {
+  return request<ProjectTokenUsage>(`/api/projects/${projectId}/usage`);
 }

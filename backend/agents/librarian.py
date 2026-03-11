@@ -74,6 +74,9 @@ class LibrarianAgent(BaseAgent):
 
         if not papers:
             logger.warning("[Librarian] No papers found for query: %s", query[:80])
+        else:
+            self._persist_web_papers(papers)
+            self._update_citation_graph(papers)
 
         # --- Local knowledge base search ---
         local_results = await self._search_local_knowledge(en_query or query)
@@ -270,6 +273,76 @@ class LibrarianAgent(BaseAgent):
 
         return []
 
+    def _update_citation_graph(self, papers: list[dict]) -> None:
+        """Add retrieved papers to the project's citation graph."""
+        if not self._project_id:
+            return
+        try:
+            from backend.config import settings as _cfg
+            from backend.knowledge.citation_graph import CitationGraph
+
+            graph_path = str(_cfg.project_path(self._project_id) / "citation_graph.json")
+            graph = CitationGraph(persist_path=graph_path)
+            graph.load()
+
+            for p in papers:
+                pid = p.get("paper_id") or p.get("arxiv_id", "")
+                if not pid:
+                    continue
+                graph.add_paper(pid, {
+                    "title": p.get("title", ""),
+                    "year": p.get("year"),
+                    "authors": ", ".join(p.get("authors", [])[:3]),
+                    "source": p.get("source", "web"),
+                    "citation_count": p.get("citation_count", 0),
+                })
+
+            graph.save()
+            logger.info(
+                "[Librarian] Citation graph updated: %d nodes",
+                graph.graph.number_of_nodes(),
+            )
+        except Exception as exc:
+            logger.warning("[Librarian] Citation graph update failed: %s", exc)
+
+    def _persist_web_papers(self, papers: list[dict]) -> None:
+        """Persist web-retrieved papers into the project's BM25 index for future retrieval."""
+        if not self._project_id or not papers:
+            return
+        try:
+            from backend.config import settings as _cfg
+            from backend.knowledge.bm25_store import BM25Store
+
+            bm25_path = str(_cfg.project_path(self._project_id) / "bm25_index.json")
+            bm25_store = BM25Store(persist_path=bm25_path)
+            bm25_store.load()
+
+            doc_ids: list[str] = []
+            texts: list[str] = []
+            for p in papers:
+                pid = p.get("paper_id") or p.get("arxiv_id", "")
+                if not pid:
+                    continue
+                doc_id = f"web_{pid}"
+                title = p.get("title", "")
+                abstract = p.get("abstract", "")
+                authors = ", ".join(p.get("authors", [])[:5])
+                year = p.get("year", "")
+                source = p.get("source", "web")
+                text = f"[{source}] [{year}] {title}\n{authors}\n{abstract}"
+                doc_ids.append(doc_id)
+                texts.append(text)
+
+            if doc_ids:
+                bm25_store.add_documents(doc_ids, texts)
+                bm25_store.save()
+                logger.info(
+                    "[Librarian] Persisted %d web papers to BM25 index",
+                    len(doc_ids),
+                )
+        except Exception as exc:
+            logger.warning("[Librarian] Failed to persist web papers: %s", exc)
+
     async def _translate_query(self, query: str) -> str:
         """Use LLM to translate a CJK research query into English keywords for
         academic search APIs.  Falls back to the original query on error."""
@@ -280,7 +353,11 @@ class LibrarianAgent(BaseAgent):
         )
         try:
             result = await self._llm_router.generate(
-                "deepseek-chat", prompt, system_prompt="You are a translator."
+                "deepseek-chat",
+                prompt,
+                system_prompt="You are a translator.",
+                project_id=self._project_id or None,
+                agent_role=self.role,
             )
             en = result.strip().strip('"').strip("'")
             if en and len(en) > 5:

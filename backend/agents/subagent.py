@@ -21,7 +21,13 @@ _SUBAGENT_MODEL = "deepseek-chat"
 @runtime_checkable
 class LLMRouter(Protocol):
     async def generate(
-        self, model: str, prompt: str, *, system_prompt: str | None = None
+        self,
+        model: str,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        project_id: str | None = None,
+        agent_role: AgentRole | None = None,
     ) -> str: ...
 
 

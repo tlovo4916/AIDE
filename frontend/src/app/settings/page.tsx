@@ -80,7 +80,7 @@ export default function SettingsPage() {
     setSaving(true);
     setSaved(false);
     try {
-      await updateSettings(settings);
+      await updateSettings(settings as unknown as Record<string, unknown>);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } finally {

@@ -94,9 +94,27 @@ export interface TopicDriftWarningPayload {
   message: string;
 }
 
+export interface TokenUsageSummary {
+  project_id: string;
+  by_model: Record<string, {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    cost_usd: number;
+    calls: number;
+  }>;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  total_cost_rmb: number;
+  total_calls: number;
+}
+
 export interface ResearchCompletedPayload {
   phase: string;
   paper_path: string | null;
+  token_usage: TokenUsageSummary | null;
 }
 
 export interface LanesStartedPayload {

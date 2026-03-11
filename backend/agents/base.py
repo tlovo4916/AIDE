@@ -11,6 +11,7 @@ from typing import Protocol, runtime_checkable
 import jinja2
 
 from backend.types import (
+    ActionType,
     AgentResponse,
     AgentRole,
     AgentTask,
@@ -28,7 +29,13 @@ class LLMRouter(Protocol):
     """Structural interface for the LLM routing layer."""
 
     async def generate(
-        self, model: str, prompt: str, *, system_prompt: str | None = None
+        self,
+        model: str,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        project_id: str | None = None,
+        agent_role: AgentRole | None = None,
     ) -> str: ...
 
 
@@ -104,7 +111,12 @@ class BaseAgent(ABC):
                 "the token limit."
             )
 
-        raw = await self._llm_router.generate(model, prompt)
+        raw = await self._llm_router.generate(
+            model,
+            prompt,
+            project_id=self._project_id or None,
+            agent_role=self.role,
+        )
 
         response = self._parse_response(raw)
 
@@ -163,13 +175,42 @@ class BaseAgent(ABC):
             )
             return AgentResponse(reasoning_summary=raw[:500])
 
-        for action in data.get("actions", []):
+        valid_actions: list[dict] = []
+        for i, action in enumerate(data.get("actions", [])):
             action.setdefault("agent_role", self.role.value)
-            # LLM 有时将 content 返回为字符串而非 dict，自动修正
+            # content: string -> dict
             if isinstance(action.get("content"), str):
                 action["content"] = {"text": action["content"]}
             elif not isinstance(action.get("content"), dict):
                 action["content"] = {}
+
+            # action_type validation and auto-correction
+            raw_type = action.get("action_type", "")
+            if not _is_valid_action_type(raw_type):
+                corrected = _fuzzy_match_action_type(raw_type)
+                if corrected:
+                    logger.info(
+                        "Agent %s: action[%d] corrected action_type %r -> %r",
+                        self.role.value, i, raw_type, corrected,
+                    )
+                    action["action_type"] = corrected
+                else:
+                    action["action_type"] = ActionType.WRITE_ARTIFACT.value
+
+            # target: ensure non-empty
+            if not action.get("target"):
+                fallback_target = (
+                    self.primary_artifact_types[0].value
+                    if self.primary_artifact_types
+                    else "unknown"
+                )
+                action["target"] = action["content"].get(
+                    "artifact_type", fallback_target,
+                )
+
+            valid_actions.append(action)
+
+        data["actions"] = valid_actions
 
         try:
             return AgentResponse.model_validate(data)
@@ -215,3 +256,21 @@ def extract_json_block(text: str) -> str:
             continue
         return text[start:end].strip()
     return text
+
+
+_VALID_ACTION_TYPES = {at.value for at in ActionType}
+
+
+def _is_valid_action_type(raw: str) -> bool:
+    return raw in _VALID_ACTION_TYPES
+
+
+def _fuzzy_match_action_type(raw: str) -> str | None:
+    """Attempt to match a malformed action_type to a valid one."""
+    if not raw:
+        return None
+    raw_lower = raw.lower().replace("-", "_").replace(" ", "_")
+    for valid in _VALID_ACTION_TYPES:
+        if valid in raw_lower or raw_lower in valid:
+            return valid
+    return None
