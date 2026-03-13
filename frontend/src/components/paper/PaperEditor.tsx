@@ -119,7 +119,7 @@ export default function PaperEditor({
   return (
     <div className="flex h-full flex-col">
       {/* Toolbar */}
-      <div className="flex items-center justify-between border-b border-slate-700 px-3 py-2">
+      <div className="flex items-center justify-between border-b border-aide-border px-3 py-2">
         <div className="flex items-center gap-1">
           {TOOLBAR_ACTIONS.map((action) => {
             const Icon = action.icon;
@@ -128,14 +128,14 @@ export default function PaperEditor({
                 key={action.label}
                 onClick={() => applyFormat(action)}
                 title={action.label}
-                className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-700 hover:text-slate-200"
+                className="rounded-lg p-1.5 text-aide-text-muted transition-colors hover:bg-aide-bg-tertiary hover:text-aide-text-primary"
               >
                 <Icon className="h-4 w-4" />
               </button>
             );
           })}
 
-          <div className="mx-2 h-5 w-px bg-slate-700" />
+          <div className="mx-2 h-5 w-px bg-aide-border" />
 
           {/* Section Selector */}
           {sections.length > 0 && (
@@ -145,7 +145,7 @@ export default function PaperEditor({
                 onChange={(e) => {
                   if (e.target.value) jumpToSection(e.target.value);
                 }}
-                className="appearance-none rounded-md border border-slate-600 bg-slate-800 py-1 pl-2 pr-7 text-xs text-slate-300 focus:border-blue-500 focus:outline-none"
+                className="appearance-none rounded-lg border border-aide-border bg-aide-bg-tertiary py-1 pl-2 pr-7 text-xs text-aide-text-secondary focus:border-aide-border-focus focus:outline-none"
               >
                 <option value="">Jump to section...</option>
                 {sections.map((s) => (
@@ -154,14 +154,14 @@ export default function PaperEditor({
                   </option>
                 ))}
               </select>
-              <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-slate-500" />
+              <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-aide-text-muted" />
             </div>
           )}
         </div>
 
         <div className="flex items-center gap-2">
           {/* Auto-save indicator */}
-          <span className="flex items-center gap-1 text-xs text-slate-500">
+          <span className="flex items-center gap-1 text-xs text-aide-text-muted">
             {saveState === "saving" && (
               <>
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -170,14 +170,14 @@ export default function PaperEditor({
             )}
             {saveState === "saved" && (
               <>
-                <Check className="h-3 w-3 text-green-500" />
+                <Check className="h-3 w-3 text-aide-accent-green" />
                 Saved
               </>
             )}
           </span>
           <button
             onClick={handleManualSave}
-            className="flex items-center gap-1.5 rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-700"
+            className="flex items-center gap-1.5 rounded-lg border border-aide-border bg-aide-bg-tertiary px-3 py-1.5 text-xs text-aide-text-secondary transition-colors hover:bg-aide-bg-elevated"
           >
             <Save className="h-3.5 w-3.5" />
             Save
@@ -188,19 +188,19 @@ export default function PaperEditor({
       {/* Split View */}
       <div className="flex flex-1 overflow-hidden">
         {/* Editor */}
-        <div className="flex-1 border-r border-slate-700">
+        <div className="flex-1 border-r border-aide-border">
           <textarea
             ref={textareaRef}
             value={content}
             onChange={(e) => onChange(e.target.value)}
             spellCheck={false}
-            className="h-full w-full resize-none bg-slate-900 p-4 font-mono text-sm text-slate-300 placeholder:text-slate-600 focus:outline-none"
+            className="h-full w-full resize-none bg-aide-bg-primary p-4 font-mono text-sm text-aide-text-primary placeholder:text-aide-text-muted focus:outline-none"
             placeholder="Start writing your paper in Markdown..."
           />
         </div>
 
         {/* Preview */}
-        <div className="flex-1 overflow-hidden bg-slate-950">
+        <div className="flex-1 overflow-hidden bg-aide-bg-secondary">
           <PaperPreview content={content} title="Preview" />
         </div>
       </div>

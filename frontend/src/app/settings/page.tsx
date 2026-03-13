@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { Save, CheckCircle2, Loader2 } from "lucide-react";
+import { useLocale } from "@/contexts/LocaleContext";
 import { getSettings, updateSettings } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -64,6 +65,7 @@ const DEFAULT_SETTINGS: SettingsData = {
 };
 
 export default function SettingsPage() {
+  const { t } = useLocale();
   const [settings, setSettings] = useState<SettingsData>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -113,19 +115,22 @@ export default function SettingsPage() {
   return (
     <div className="mx-auto max-w-2xl animate-fade-in">
       <div className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight text-aide-text-primary">
-          Settings
+        <h1 className="page-title text-2xl font-semibold tracking-tight text-aide-text-primary">
+          {t("section.settings")}
         </h1>
-        <p className="mt-1 text-sm text-aide-text-secondary">
-          Configure API keys, model preferences, and research defaults
+        <p className="mt-2 text-sm text-aide-text-secondary">
+          {t("misc.settingsDesc")}
         </p>
       </div>
 
       <div className="space-y-6">
         {/* API Keys */}
-        <Card>
+        <Card hoverable className="animate-slide-up stagger-1" style={{ opacity: 0, animationFillMode: "forwards" }}>
           <CardHeader>
-            <CardTitle>API Keys</CardTitle>
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2 w-2 rounded-full bg-aide-accent-blue" />
+              <CardTitle>{t("section.apiKeys")}</CardTitle>
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <Input
@@ -170,48 +175,47 @@ export default function SettingsPage() {
         </Card>
 
         {/* Model Preferences */}
-        <Card>
+        <Card hoverable className="animate-slide-up stagger-2" style={{ opacity: 0, animationFillMode: "forwards" }}>
           <CardHeader>
-            <CardTitle>Model Preferences</CardTitle>
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2 w-2 rounded-full bg-aide-accent-green" />
+              <CardTitle>{t("section.modelPreferences")}</CardTitle>
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
               <label className="mb-1.5 block text-sm font-medium text-aide-text-secondary">
-                Default Model
+                {t("form.defaultModel")}
               </label>
               <select
                 value={settings.default_model}
                 onChange={(e) => updateField("default_model", e.target.value)}
-                className="w-full rounded-md border border-aide-border bg-aide-bg-tertiary px-3 py-2 text-sm text-aide-text-primary outline-none transition-colors focus:border-aide-border-focus"
+                className="w-full rounded-lg border border-aide-border bg-aide-bg-secondary px-3 py-2 text-sm text-aide-text-primary outline-none transition-all input-focus-ring focus:border-aide-border-focus"
               >
                 {MODEL_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </select>
             </div>
 
             <div>
               <label className="mb-1.5 block text-sm font-medium text-aide-text-secondary">
-                Orchestrator Model
+                {t("form.orchestratorModel")}
               </label>
               <select
                 value={settings.orchestrator_model}
                 onChange={(e) => updateField("orchestrator_model", e.target.value)}
-                className="w-full rounded-md border border-aide-border bg-aide-bg-tertiary px-3 py-2 text-sm text-aide-text-primary outline-none transition-colors focus:border-aide-border-focus"
+                className="w-full rounded-lg border border-aide-border bg-aide-bg-secondary px-3 py-2 text-sm text-aide-text-primary outline-none transition-all input-focus-ring focus:border-aide-border-focus"
               >
                 {MODEL_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </select>
             </div>
 
             <div>
               <label className="mb-2 block text-sm font-medium text-aide-text-secondary">
-                Per-Agent Model Configuration
+                {t("section.perAgentModel")}
               </label>
               <div className="space-y-2">
                 {AGENT_ROLES.map((role) => (
@@ -220,19 +224,13 @@ export default function SettingsPage() {
                       {role.label}
                     </span>
                     <select
-                      value={
-                        settings.agent_model_overrides[role.key] ?? ""
-                      }
-                      onChange={(e) =>
-                        updateAgentOverride(role.key, e.target.value)
-                      }
-                      className="flex-1 rounded-md border border-aide-border bg-aide-bg-tertiary px-3 py-1.5 text-sm text-aide-text-primary outline-none transition-colors focus:border-aide-border-focus"
+                      value={settings.agent_model_overrides[role.key] ?? ""}
+                      onChange={(e) => updateAgentOverride(role.key, e.target.value)}
+                      className="flex-1 rounded-lg border border-aide-border bg-aide-bg-secondary px-3 py-1.5 text-sm text-aide-text-primary outline-none transition-all input-focus-ring focus:border-aide-border-focus"
                     >
-                      <option value="">Use default</option>
+                      <option value="">{t("form.useDefault")}</option>
                       {MODEL_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
                       ))}
                     </select>
                   </div>
@@ -242,12 +240,12 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
-        {/* Save Button */}
-        <div className="flex items-center justify-end gap-3">
+        {/* Sticky Save Button */}
+        <div className="sticky bottom-4 flex items-center justify-end gap-3 rounded-xl border border-aide-border bg-aide-bg-secondary/90 px-4 py-3 backdrop-blur-sm shadow-lg">
           {saved && (
             <span className="flex items-center gap-1.5 text-sm text-aide-accent-green animate-fade-in">
               <CheckCircle2 className="h-4 w-4" />
-              Settings saved
+              {t("status.saved")}
             </span>
           )}
           <Button
@@ -261,7 +259,7 @@ export default function SettingsPage() {
             ) : (
               <Save className="mr-2 h-4 w-4" />
             )}
-            Save Settings
+            {t("action.saveSettings")}
           </Button>
         </div>
       </div>

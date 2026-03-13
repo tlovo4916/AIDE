@@ -7,25 +7,11 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from backend.types import ActionType, AgentRole, BlackboardAction
+from backend.utils.json_utils import safe_json_loads
 
 logger = logging.getLogger(__name__)
 
 LLMCall = Callable[[list[dict[str, str]]], Awaitable[str]]
-
-
-def _strip_markdown_fences(text: str) -> str:
-    """Remove markdown code fences (```json ... ```) wrapping JSON output."""
-    text = text.strip()
-    for fence in ("```json", "```"):
-        idx = text.find(fence)
-        if idx == -1:
-            continue
-        start = idx + len(fence)
-        end = text.find("```", start)
-        if end == -1:
-            continue
-        return text[start:end].strip()
-    return text
 
 
 class WriteBackGuard:
@@ -75,8 +61,7 @@ class WriteBackGuard:
                 ]
             )
 
-            cleaned = _strip_markdown_fences(result.strip())
-            insights = json.loads(cleaned)
+            insights = safe_json_loads(result, fallback=[])
             if not isinstance(insights, list) or not insights:
                 return []
 

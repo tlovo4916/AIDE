@@ -291,6 +291,16 @@ async def get_citation_graph(
         data = dict(graph.graph.nodes[node_id])
         data["id"] = node_id
         data["citation_count"] = data.get("citation_count", graph.graph.in_degree(node_id))
+        if not data.get("url"):
+            arxiv_id = data.get("arxiv_id", "")
+            doi = data.get("doi", "")
+            source = data.get("source", "")
+            if arxiv_id:
+                data["url"] = f"https://arxiv.org/abs/{arxiv_id}"
+            elif doi:
+                data["url"] = f"https://doi.org/{doi}"
+            elif source == "semantic_scholar" and node_id:
+                data["url"] = f"https://www.semanticscholar.org/paper/{node_id}"
         nodes.append(data)
 
     edges = [

@@ -39,7 +39,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
             ref={ref}
             type={resolvedType}
             className={cn(
-              "w-full rounded-md border bg-aide-bg-tertiary px-3 py-2 text-sm text-aide-text-primary placeholder-aide-text-muted outline-none transition-colors",
+              "w-full h-10 rounded-lg border bg-aide-bg-secondary px-3 py-2 text-sm text-aide-text-primary placeholder-aide-text-muted outline-none transition-all focus-visible:ring-2 focus-visible:ring-aide-accent-blue/25 input-focus-ring",
               error
                 ? "border-aide-accent-red focus:border-aide-accent-red"
                 : "border-aide-border focus:border-aide-border-focus",

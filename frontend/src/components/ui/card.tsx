@@ -19,15 +19,17 @@ type CardVariant = keyof typeof VARIANT_STYLES;
 
 interface CardProps extends HTMLAttributes<HTMLDivElement> {
   variant?: CardVariant;
+  hoverable?: boolean;
 }
 
 const Card = forwardRef<HTMLDivElement, CardProps>(
-  ({ className, variant = "default", ...props }, ref) => (
+  ({ className, variant = "default", hoverable, ...props }, ref) => (
     <div
       ref={ref}
       className={cn(
-        "rounded-lg border",
+        "rounded-xl border shadow-card",
         VARIANT_STYLES[variant],
+        hoverable && "card-hover cursor-pointer",
         className
       )}
       {...props}
@@ -42,7 +44,7 @@ const CardHeader = forwardRef<
 >(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={cn("px-4 pt-4 pb-2", className)}
+    className={cn("px-6 pt-5 pb-2", className)}
     {...props}
   />
 ));
@@ -55,7 +57,7 @@ const CardTitle = forwardRef<
   <h3
     ref={ref}
     className={cn(
-      "text-sm font-semibold text-aide-text-primary",
+      "text-base font-semibold text-aide-text-primary",
       className
     )}
     {...props}
@@ -63,11 +65,23 @@ const CardTitle = forwardRef<
 ));
 CardTitle.displayName = "CardTitle";
 
+const CardDescription = forwardRef<
+  HTMLParagraphElement,
+  HTMLAttributes<HTMLParagraphElement>
+>(({ className, ...props }, ref) => (
+  <p
+    ref={ref}
+    className={cn("text-sm text-aide-text-muted", className)}
+    {...props}
+  />
+));
+CardDescription.displayName = "CardDescription";
+
 const CardContent = forwardRef<
   HTMLDivElement,
   HTMLAttributes<HTMLDivElement>
 >(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn("px-4 py-3", className)} {...props} />
+  <div ref={ref} className={cn("px-6 py-4", className)} {...props} />
 ));
 CardContent.displayName = "CardContent";
 
@@ -78,7 +92,7 @@ const CardFooter = forwardRef<
   <div
     ref={ref}
     className={cn(
-      "border-t border-aide-border px-4 py-3",
+      "border-t border-aide-border px-6 py-4",
       className
     )}
     {...props}
@@ -86,5 +100,5 @@ const CardFooter = forwardRef<
 ));
 CardFooter.displayName = "CardFooter";
 
-export { Card, CardHeader, CardTitle, CardContent, CardFooter };
+export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter };
 export type { CardVariant };

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from backend.types import ArtifactType
+from backend.utils.json_utils import safe_json_loads
 
 logger = logging.getLogger(__name__)
 
@@ -90,21 +90,6 @@ _L0_MAX_CHARS = 200
 _L1_MAX_CHARS = 2000
 
 
-def _strip_markdown_fences(text: str) -> str:
-    """Remove markdown code fences (```json ... ```) wrapping JSON output."""
-    text = text.strip()
-    for fence in ("```json", "```"):
-        idx = text.find(fence)
-        if idx == -1:
-            continue
-        start = idx + len(fence)
-        end = text.find("```", start)
-        if end == -1:
-            continue
-        return text[start:end].strip()
-    return text
-
-
 class LevelGenerator:
     def __init__(self, llm_call: LLMCall) -> None:
         self._llm_call = llm_call
@@ -143,11 +128,11 @@ class LevelGenerator:
                     {"role": "user", "content": prompt},
                 ]
             )
-            cleaned = _strip_markdown_fences(result.strip())
-            return json.loads(cleaned)
-        except json.JSONDecodeError:
-            logger.warning("LLM L1 returned invalid JSON, using truncation")
-            return self._truncate_l1(content_l2, artifact_type)
+            parsed = safe_json_loads(result)
+            if parsed is None:
+                logger.warning("LLM L1 returned invalid JSON, using truncation")
+                return self._truncate_l1(content_l2, artifact_type)
+            return parsed
         except Exception as exc:
             logger.warning("LLM L1 generation failed, using truncation: %s", exc)
             return self._truncate_l1(content_l2, artifact_type)

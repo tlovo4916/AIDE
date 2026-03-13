@@ -234,6 +234,41 @@ All backend settings are Pydantic `BaseSettings` in `backend/config.py`, overrid
 - **Run 2**（课题 "Knowledge distillation"）：14 轮 ~37min，104,719 tokens，$0.77 / 5.58 RMB
 - 两次运行均 4 阶段全部 critic 收敛通过，token 数据完整写入 DB，项目间完全隔离
 
+### Session 9（2026-03-11）— 前端重构 + Phase 3 收尾
+
+#### Phase 3 后端收尾
+43. **统一 `safe_json_loads()`**：新建 `backend/utils/json_utils.py`，集中 markdown fence 剥离 + 前缀文字剥离 + JSON 解析 + fallback。替换 `levels.py`/`base.py`/`write_back_guard.py` 中的重复 `_strip_markdown_fences()` + `json.loads()` 逻辑。
+44. **arXiv/S2 检索结果入 ChromaDB**：`librarian.py` 新增 `_persist_to_chromadb()`，在 OpenAI API key 可用时自动将检索论文嵌入并存入 ChromaDB 向量库（含去重检查），不可用时 graceful skip 仅走 BM25。
+
+#### 前端重构（Indigo 主题 + 研究流水线可视化）
+45. **设计系统**：`globals.css` 从蓝色系迁移到 Indigo 系（dark: `#818cf8`，light: `#4f46e5`）。新增 CSS 变量（shadow-card/shadow-card-hover/shadow-btn-glow/primary-50~900）、动画（scale-in/slide-in-left）、工具类（card-hover/btn-primary-glow/page-title/sidebar-item/input-focus-ring/::selection）。
+46. **UI 组件升级**：Button（新增 outline/success variant + hover glow + rounded-lg）、Card（rounded-xl + shadow-sm + hoverable prop）、Badge（rounded-full 药丸形 + indigo agent variant）、Modal（size prop sm/md/lg/xl/full + scale-in 动画 + bg-black/80）、Input（h-10 + rounded-lg + input-focus-ring）。
+47. **Sidebar 重写**：240px↔64px 收起展开 + `data-sidebar` 属性驱动主内容区 margin + 项目内 5 section 导航（Overview/Blackboard/Messages/Knowledge/Paper）。
+48. **ProjectSidebarContext**：`frontend/src/contexts/ProjectSidebarContext.tsx`，跨组件共享项目导航状态。
+49. **项目详情页分解**（1298 行 → ~200 行容器 + 5 section + 1 hook + 1 utils）：
+    - `_utils/formatters.ts`：PHASES/ARTIFACT_SECTIONS/parseTS/formatElapsed/formatDateTime/getArtifactDisplay
+    - `_hooks/useProjectState.ts`：全部 useState + WS 订阅 + 30s 轮询 + action handlers
+    - `_components/OverviewSection.tsx`：研究流水线节点图（6 色阶段 + 展开产出 + timeline + lane 进度 + token/time 卡）
+    - `_components/BlackboardSection.tsx`：全宽 3 列 artifact 网格（按类型分组 + 折叠 + hoverable）
+    - `_components/MessagesSection.tsx`：双栏（消息流含角色过滤 + Challenge 面板含状态过滤）
+    - `_components/KnowledgeSection.tsx`：双栏（PapersPanel + 引用图谱内联展示）
+    - `_components/PaperSection.tsx`：论文编辑/预览 + token 统计 + 导出
+50. **Dashboard 改版**：page-title 渐变下划线 + stagger 进入动画 + hoverable 卡片 + Modal 子组件提取。
+51. **Settings 改版**：page-title + hoverable Card + colored 分组标签 + sticky 保存按钮 + stagger 动画。
+52. **PaperEditor 颜色适配**：全部 `slate-*` 硬编码颜色替换为 `aide-*` CSS 变量。
+53. **清理 10 个废弃组件**：BoardView/ChallengePanel/MessageStream/PhaseIndicator/SpiralVisualizer/PDFUploader/SearchTester/CitationGraph/CheckpointModal/AdjustEditor + 3 个空目录。
+
+### Session 10（2026-03-13）— 全面质量验证
+
+#### 测试执行（4 并行团队 + 1 全链路）
+54. **后端单元测试**：Ruff Lint 0 issues；Pytest 17/17 PASS（test_json_utils）；Ruff Format 6 files 需格式化（非阻塞）
+55. **REST API 集成测试**：10 个端点全部通过（health/projects CRUD/settings GET+PUT/usage/citation-graph/export paper html/DELETE）
+56. **WebSocket 连通测试**：`ws://localhost:8000/ws/projects/{id}` 连接成功并稳定保持
+57. **并发压力测试**：120 请求 / 0.35s = 341 req/s，0 错误（health p50=4.7ms, projects p50=196ms, create p50=112ms）
+58. **前端渲染测试**：Dashboard/Settings/项目详情页全部 HTTP 200；7 个 JS chunk + CSS + 字体正常加载
+59. **全链路 E2E 测试**：创建项目 → 启动研究 → Planner 分配 Agent（Librarian/Director）→ arXiv 检索 5 篇论文 → 3 个 Artifact 产出（L0/L1/L2 三级）→ Token 计费正常（8,923 tokens / $0.059）→ 引用图谱 5 节点 → 暂停/恢复正常 → 前端渲染正常
+60. **测试清理**：删除 29 个测试/压力测试项目
+
 ---
 
 ## 已知未完成 / 待改进项
@@ -243,10 +278,7 @@ All backend settings are Pydantic `BaseSettings` in `backend/config.py`, overrid
 - **偏题检查是关键词匹配**：`_check_on_topic()` 用字符串匹配，不做语义理解。
 - **前端 Blackboard 详情视图**：当前只展示 L0 摘要卡片，未实现点击展开 L1/L2 完整内容。
 - **WriteBackGuard 效果待验证**：降噪已做（fence 剥离 + 截断），但实际是否产生有价值的 write-back artifact 未确认。
-- **arXiv/S2 检索结果未入 ChromaDB**：已入 BM25 但未入向量库（需 OpenAI embedding key）。
-
 ### 低优先级
 - **Challenge 处理**：自动 dismiss（>2 iters）已实现，但未测试完整 raise→respond→resolve 流程。
 - **`adapter.py` 可能是死代码**：`factory.py` 直接使用 `Blackboard`，`BoardAdapter` 可能无存在意义。
 - **Agent 超时 300s**：实测中未触发超时，但 Librarian 含 S2 重试时理论可达 ~4min，接近阈值。
-- **统一 `safe_json_loads()`**：fence 剥离 + JSON 解析散落各处，应集中为工具函数。

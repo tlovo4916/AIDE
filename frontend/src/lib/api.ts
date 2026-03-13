@@ -206,6 +206,7 @@ export interface CitationGraphData {
     year?: number;
     authors?: string;
     source?: string;
+    url?: string;
     citation_count: number;
   }[];
   edges: { source: string; target: string }[];

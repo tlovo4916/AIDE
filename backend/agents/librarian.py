@@ -75,7 +75,7 @@ class LibrarianAgent(BaseAgent):
         if not papers:
             logger.warning("[Librarian] No papers found for query: %s", query[:80])
         else:
-            self._persist_web_papers(papers)
+            await self._persist_web_papers(papers)
             self._update_citation_graph(papers)
 
         # --- Local knowledge base search ---
@@ -289,12 +289,25 @@ class LibrarianAgent(BaseAgent):
                 pid = p.get("paper_id") or p.get("arxiv_id", "")
                 if not pid:
                     continue
+                arxiv_id = p.get("arxiv_id", "")
+                doi = p.get("doi", "")
+                source = p.get("source", "web")
+                url = ""
+                if arxiv_id:
+                    url = f"https://arxiv.org/abs/{arxiv_id}"
+                elif doi:
+                    url = f"https://doi.org/{doi}"
+                elif source == "semantic_scholar" and pid:
+                    url = f"https://www.semanticscholar.org/paper/{pid}"
                 graph.add_paper(pid, {
                     "title": p.get("title", ""),
                     "year": p.get("year"),
                     "authors": ", ".join(p.get("authors", [])[:3]),
-                    "source": p.get("source", "web"),
+                    "source": source,
                     "citation_count": p.get("citation_count", 0),
+                    "url": url,
+                    "arxiv_id": arxiv_id,
+                    "doi": doi,
                 })
 
             graph.save()
@@ -305,8 +318,8 @@ class LibrarianAgent(BaseAgent):
         except Exception as exc:
             logger.warning("[Librarian] Citation graph update failed: %s", exc)
 
-    def _persist_web_papers(self, papers: list[dict]) -> None:
-        """Persist web-retrieved papers into the project's BM25 index for future retrieval."""
+    async def _persist_web_papers(self, papers: list[dict]) -> None:
+        """Persist web-retrieved papers into BM25 index and optionally ChromaDB."""
         if not self._project_id or not papers:
             return
         try:
@@ -340,8 +353,63 @@ class LibrarianAgent(BaseAgent):
                     "[Librarian] Persisted %d web papers to BM25 index",
                     len(doc_ids),
                 )
+
+            # Also persist to ChromaDB if OpenAI API key is available
+            await self._persist_to_chromadb(doc_ids, texts)
+
         except Exception as exc:
             logger.warning("[Librarian] Failed to persist web papers: %s", exc)
+
+    async def _persist_to_chromadb(self, doc_ids: list[str], texts: list[str]) -> None:
+        """Store papers in ChromaDB vector store when OpenAI embedding key is available."""
+        if not doc_ids:
+            return
+        try:
+            from backend.config import settings as _cfg
+
+            if not _cfg.openai_api_key:
+                return
+
+            from backend.knowledge.embeddings import EmbeddingService
+            from backend.knowledge.vector_store import VectorStore
+
+            embedding_svc = EmbeddingService(api_key=_cfg.openai_api_key)
+            vector_store = VectorStore(
+                collection_name=f"project_{self._project_id}",
+            )
+
+            # Check for existing docs to avoid duplicates
+            existing_count = vector_store.count()
+            existing_ids: set[str] = set()
+            if existing_count > 0:
+                try:
+                    collection = vector_store.collection
+                    result = collection.get(ids=doc_ids)
+                    existing_ids = set(result["ids"]) if result and result.get("ids") else set()
+                except Exception:
+                    pass
+
+            new_ids = [did for did in doc_ids if did not in existing_ids]
+            new_texts = [texts[i] for i, did in enumerate(doc_ids) if did not in existing_ids]
+
+            if not new_ids:
+                return
+
+            embeddings = await embedding_svc.embed_batch(new_texts)
+
+            vector_store.add_documents(
+                ids=new_ids,
+                embeddings=embeddings,
+                documents=new_texts,
+                metadatas=[{"source": "web_retrieval", "doc_id": did} for did in new_ids],
+            )
+            logger.info(
+                "[Librarian] Persisted %d web papers to ChromaDB (skipped %d existing)",
+                len(new_ids),
+                len(existing_ids),
+            )
+        except Exception as exc:
+            logger.warning("[Librarian] ChromaDB persistence failed (graceful skip): %s", exc)
 
     async def _translate_query(self, query: str) -> str:
         """Use LLM to translate a CJK research query into English keywords for

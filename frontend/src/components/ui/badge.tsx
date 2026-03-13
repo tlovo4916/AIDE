@@ -18,7 +18,7 @@ const VARIANT_STYLES = {
   danger:
     "border-aide-accent-red/30 bg-aide-accent-red/10 text-aide-accent-red",
   agent:
-    "border-violet-500/30 bg-violet-500/10 text-violet-400",
+    "border-aide-accent-blue/30 bg-aide-accent-blue/10 text-aide-accent-blue",
 } as const;
 
 type BadgeVariant = keyof typeof VARIANT_STYLES;
@@ -32,7 +32,7 @@ const Badge = forwardRef<HTMLSpanElement, BadgeProps>(
     <span
       ref={ref}
       className={cn(
-        "inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium",
+        "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold",
         VARIANT_STYLES[variant],
         className
       )}

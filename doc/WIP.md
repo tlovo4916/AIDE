@@ -1,6 +1,6 @@
 # AIDE — 开发进度 WIP
 
-> 最后更新：2026-03-11（Session 8）
+> 最后更新：2026-03-13（Session 10）
 
 ---
 
@@ -10,8 +10,8 @@
 |------|----------|--------|------|
 | Phase 1：基础架构 | Docker、FastAPI、DB、Blackboard、WS | ~90% | ✅ 基本完成 |
 | Phase 2：多智能体核心 | 6 Agent + Orchestrator 主循环 + 并行 Lane | **100%** | ✅ Token 计费链路修复，全流程验证通过 |
-| Phase 3：高级研究能力 | 语义检索、真实 RAG、论文导出 | **~85%** | ✅ 去重/引用图/论文编辑导出/Token 费用展示 |
-| Phase 4：产品打磨 | 智能推荐、实验追踪、协作 | ~15% | 🔧 前端 concurrency 滑块、settings Anthropic 区、Token 费用展示 |
+| Phase 3：高级研究能力 | 语义检索、真实 RAG、论文导出 | **100%** | ✅ safe_json_loads 统一 + arXiv/S2 入 ChromaDB |
+| Phase 4：产品打磨 | 智能推荐、实验追踪、协作 | ~35% | 🔧 Indigo 主题前端重构 + 研究流水线可视化 + Sidebar 重写 + Session 10 全面测试通过 |
 
 ---
 
@@ -92,12 +92,15 @@
 - **论文编辑模式**（Session 8）：前端可编辑论文内容 + `PUT /api/projects/{id}/export/paper` 保存
 - **论文 HTML/PDF 导出**（Session 8）：`GET /api/projects/{id}/export/paper/html` 返回可打印 HTML（含 CSS 排版），浏览器 print 导出 PDF
 
+- **统一 `safe_json_loads()`**（Session 9）：`backend/utils/json_utils.py` 集中 markdown fence 剥离 + JSON 解析，替换 levels.py/base.py/write_back_guard.py 中的重复逻辑
+- **arXiv/S2 检索结果入 ChromaDB**（Session 9）：`_persist_to_chromadb()` 在 OpenAI key 可用时自动入库向量数据库，含去重检查
+
 ### ❌ 未完成
-- **arXiv 检索结果未入 ChromaDB**：已入 BM25 但未入向量库（需 OpenAI embedding key）
+- （Phase 3 全部完成）
 
 ---
 
-## Phase 4：产品打磨（~10%）
+## Phase 4：产品打磨（~35%）
 
 ### ✅ 已完成
 - 基础设置页面（LLM provider 选择、token 预算配置）
@@ -107,6 +110,26 @@
 - **Token 费用展示**（Session 8）：完成 banner 显示总 token/USD/RMB，论文弹窗显示分模型明细
 - **Lane 进度可视化**（Session 8）：LanesStarted/LaneCompleted/SynthesisStarted 事件处理
 - **引用图谱弹窗**（Session 8）：前端可查看检索到的论文列表
+
+#### Session 9 — 前端重构
+- **Indigo 主色迁移**：`globals.css` 从蓝色系切换到 Indigo 系，含深浅双模式完整色阶（primary-50~900）
+- **设计系统升级**：新增 scale-in/slide-in-left 动画、stagger 动画类、card-hover/btn-primary-glow/page-title/sidebar-item/input-focus-ring 工具类
+- **UI 组件升级**：Button（outline/success variant + glow）、Card（hoverable prop + rounded-xl）、Badge（rounded-full 药丸形 + indigo agent variant）、Modal（size prop sm/md/lg/xl/full + scale-in 动画）、Input（h-10 + focus ring）
+- **Sidebar 重写**：240px/64px 收起展开 + localStorage 持久化 + 项目内 5 section 导航（Overview/Blackboard/Messages/Knowledge/Paper）
+- **ProjectSidebarContext**：跨组件共享项目导航状态
+- **Layout 适配**：响应 sidebar 宽度的 margin 切换 + 过渡动画
+- **Dashboard 改版**：page-title 渐变下划线 + stagger 进入动画 + hoverable 卡片 + 运行项目 indigo 侧边条 + Modal 子组件提取
+- **项目详情页分解**（1298 行 → 容器 200 行 + 5 section）：
+  - `formatters.ts`：常量 + 工具函数提取
+  - `useProjectState.ts`：全部状态 + WS + 轮询 + action handlers
+  - `OverviewSection.tsx`：研究流水线节点图（6 色阶段卡 + 展开产出 + timeline 连接线 + lane 进度 + token/time 信息卡 + 活动流）
+  - `BlackboardSection.tsx`：全宽 3 列 artifact 网格（按类型分组 + 折叠 + hoverable 卡片）
+  - `MessagesSection.tsx`：双栏（消息流含角色过滤 + Challenge 面板含状态过滤）
+  - `KnowledgeSection.tsx`：双栏（PapersPanel + 引用图谱内联展示）
+  - `PaperSection.tsx`：论文编辑/预览 + token 统计 + 导出按钮
+- **Settings 改版**：page-title + hoverable Card + 分组 colored label + sticky 保存按钮 + stagger 动画
+- **PaperEditor 颜色适配**：slate-* → aide-* CSS 变量
+- **清理 10 个废弃组件**：BoardView/ChallengePanel/MessageStream/PhaseIndicator/SpiralVisualizer/PDFUploader/SearchTester/CitationGraph/CheckpointModal/AdjustEditor
 
 ### ❌ 未完成
 - 智能研究方向推荐
@@ -232,11 +255,54 @@
 
 ### P2 — RAG 闭环
 - [x] arXiv/S2 检索结果入 BM25 持久化（Session 8 完成）
-- [ ] arXiv/S2 检索结果入 ChromaDB 持久化（需 OpenAI embedding key）
-- [ ] 统一 `safe_json_loads()` 工具函数，集中处理 LLM 输出的 fence 剥离 + JSON 解析
+- [x] arXiv/S2 检索结果入 ChromaDB 持久化（Session 9 完成）
+- [x] 统一 `safe_json_loads()` 工具函数（Session 9 完成）
 
 ### P3 — 长期完善
 - [ ] Agent 输出 Pydantic schema 强校验
 - [ ] 多用户 / 协作功能
 - [ ] 研究可视化（假设演化、证据图）
 - [ ] Magic numbers 收进 config.py 统一管理（300s 超时、3000 字符截断等）
+
+---
+
+## Session 10（2026-03-13）— 全面质量验证
+
+### 测试执行与结果
+
+#### 后端单元测试
+- Ruff Lint: 0 issues
+- Ruff Format: 6 files 需格式化（非阻塞，均为已改动文件的格式差异）
+- Pytest: 17/17 全部通过（`test_json_utils.py` TestSafeJsonLoads 套件）
+
+#### REST API 集成测试（10 个端点）
+- `/health`、`/api/projects` CRUD、`/api/settings` GET/PUT、`/usage`、`/citation-graph`、`/export/paper/html`、DELETE：全部返回预期状态码
+- 发现：创建项目字段为 `name`（非 `title`）；设置更新方法为 PUT（非 POST）
+
+#### WebSocket 连通测试
+- 连接 `ws://localhost:8000/ws/projects/{id}` 成功，稳定保持 3 秒
+- 无研究运行时无广播消息（预期行为）
+
+#### 并发压力测试
+- 120 请求 / 0.35s = **341 req/s**，**0 错误**
+- `GET /health` p50=4.7ms / p99=13.3ms
+- `GET /api/projects` p50=196.5ms / p99=205.1ms
+- `POST /api/projects` p50=111.6ms / p99=115.7ms
+
+#### 前端页面渲染测试
+- Dashboard / Settings / 项目详情页：全部 HTTP 200
+- 7 个 JS chunk 全部加载正常
+- CSS 79KB + 字体预加载正常
+- SSR 输出含正确的页面结构和组件引用
+
+#### 全链路 E2E 测试
+- 创建项目 → 启动研究 → 引擎运行（Planner 分配 Librarian/Director）
+- arXiv 检索成功（5 篇论文），S2 触发 429 后 backoff 正常
+- **3 个 artifact 产出**（directions/evidence_findings/trend_signals），L0/L1/L2 三级全部生成
+- **Token 计费正常**：8,923 tokens / $0.059 / 0.43 RMB / 3 次 LLM 调用
+- 引用图谱：5 节点正确入库
+- 暂停/恢复：正常
+- 前端渲染 E2E 项目页面：正常
+
+### 测试后清理
+- 删除 29 个测试/压力测试项目，数据库恢复干净状态

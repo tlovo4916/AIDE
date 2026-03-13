@@ -3,14 +3,25 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 
+const SIZE_CLASSES = {
+  sm: "max-w-sm",
+  md: "max-w-md",
+  lg: "max-w-lg",
+  xl: "max-w-xl",
+  full: "max-w-4xl",
+} as const;
+
+type ModalSize = keyof typeof SIZE_CLASSES;
+
 interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
   title?: string;
+  size?: ModalSize;
   children: ReactNode;
 }
 
-export function Modal({ isOpen, onClose, title, children }: ModalProps) {
+export function Modal({ isOpen, onClose, title, size = "lg", children }: ModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -39,8 +50,8 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
         if (e.target === overlayRef.current) onClose();
       }}
     >
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-      <div className="relative z-10 w-full max-w-lg rounded-xl border border-aide-border bg-aide-bg-secondary p-6 shadow-2xl animate-slide-up">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+      <div className={`relative z-10 w-full ${SIZE_CLASSES[size]} mx-4 rounded-xl border border-aide-border bg-aide-bg-secondary p-6 shadow-2xl animate-scale-in`}>
         <div className="mb-4 flex items-center justify-between">
           {title && (
             <h2 className="text-lg font-semibold text-aide-text-primary">
@@ -49,7 +60,7 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
           )}
           <button
             onClick={onClose}
-            className="ml-auto rounded-md p-1.5 text-aide-text-muted transition-colors hover:bg-aide-bg-tertiary hover:text-aide-text-primary"
+            className="ml-auto rounded-lg p-1.5 text-aide-text-muted transition-colors hover:bg-aide-bg-tertiary hover:text-aide-text-primary"
           >
             <X className="h-4 w-4" />
           </button>

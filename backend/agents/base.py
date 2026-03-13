@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from abc import ABC
 from pathlib import Path
@@ -18,6 +17,7 @@ from backend.types import (
     ArtifactType,
     BlackboardAction,
 )
+from backend.utils.json_utils import safe_json_loads
 
 logger = logging.getLogger(__name__)
 
@@ -165,10 +165,8 @@ class BaseAgent(ABC):
     # ------------------------------------------------------------------
 
     def _parse_response(self, raw: str) -> AgentResponse:
-        text = extract_json_block(raw)
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
+        data = safe_json_loads(raw)
+        if data is None:
             logger.warning(
                 "Agent %s: non-JSON response, wrapping as summary",
                 self.role.value,
@@ -241,21 +239,6 @@ def format_task(task: AgentTask) -> str:
     if task.allow_subagents:
         lines.append("SubAgent spawning: allowed")
     return "\n".join(lines)
-
-
-def extract_json_block(text: str) -> str:
-    """Pull JSON from optional markdown code fences."""
-    text = text.strip()
-    for fence in ("```json", "```"):
-        idx = text.find(fence)
-        if idx == -1:
-            continue
-        start = idx + len(fence)
-        end = text.find("```", start)
-        if end == -1:
-            continue
-        return text[start:end].strip()
-    return text
 
 
 _VALID_ACTION_TYPES = {at.value for at in ActionType}

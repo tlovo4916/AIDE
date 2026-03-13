@@ -27,7 +27,7 @@ function renderInline(text: string): ReactNode {
 // Block-level parser
 // ---------------------------------------------------------------------------
 interface Block {
-  type: "h1" | "h2" | "h3" | "ul" | "ol" | "pre" | "p";
+  type: "h1" | "h2" | "h3" | "ul" | "ol" | "pre" | "p" | "hr";
   items?: string[];   // ul / ol
   text?: string;      // h1-h3, p
   code?: string;      // pre
@@ -56,6 +56,9 @@ function parseBlocks(src: string): Block[] {
       blocks.push({ type: "pre", code: codeLines.join("\n") });
       continue;
     }
+
+    // Horizontal rule
+    if (/^---+$/.test(line.trim())) { blocks.push({ type: "hr" }); i++; continue; }
 
     // Headers
     if (line.startsWith("### ")) { blocks.push({ type: "h3", text: line.slice(4) }); i++; continue; }
@@ -114,6 +117,7 @@ export function Markdown({ children, className }: { children: string; className?
           case "h1": return <h1 key={bi}>{renderInline(block.text!)}</h1>;
           case "h2": return <h2 key={bi}>{renderInline(block.text!)}</h2>;
           case "h3": return <h3 key={bi}>{renderInline(block.text!)}</h3>;
+          case "hr": return <hr key={bi} className="my-2 border-aide-border/50" />;
           case "pre": return <pre key={bi}><code>{block.code}</code></pre>;
           case "ul":
             return (

@@ -258,9 +258,39 @@ record_usage() 从未被调用 → token_usage 表永远为空
 - **S2 冷却期设计**（Session 7）：用类变量共享冷却状态，所有 Librarian 实例都能受益。
 
 ### 需要改进的
-- **LLM 输出解析缺乏统一层**：fence 剥离、JSON 解析、score 提取散落在各处。应该有一个统一的 `LLMOutputParser` 处理所有 LLM→结构化数据的转换。
+- ~~**LLM 输出解析缺乏统一层**：fence 剥离、JSON 解析、score 提取散落在各处~~（Session 9 已解决：`backend/utils/json_utils.py` 中的 `safe_json_loads()` 统一了所有 JSON 解析入口）
 - **fallback 代码从未被测试**：每次写 fallback 都是"写完就忘"，直到生产环境触发才发现崩溃。需要对 fallback 路径做专门的测试。
 - **Magic numbers 太多**：300s 超时、360s stale、30K token budget、3000 字符截断、5min S2 cooldown——应该全部收进 `config.py` 统一管理。
 - **不同 LLM 的适配层不够**：Claude 和 DeepSeek 对 JSON 格式指令的遵循度差异很大，当前的适配是在 `base.py` 里硬编码的 `if model.startswith("claude-")`，不够优雅。应该在 provider 层或 router 层做模型族级别的适配。
 - **可选参数默认 None 的隐形风险**（Session 8 教训）：`generate(project_id=None)` 导致计费从未触发。关键功能参数不应该用 None 默认值静默跳过，应该至少产生一条 warning 日志。
 - **跨文件复制粘贴遗漏**（Session 8 教训）：factory.py 中 6 个 agent 构造只有 1 个传了 project_id，是典型的复制粘贴遗漏。批量构造应考虑用循环或 factory 函数统一参数。
+
+---
+
+## 11. Session 10 全面测试 — 质量验证基线
+
+**测试日期**：2026-03-13
+
+### 测试覆盖与结论
+
+| 测试类型 | 范围 | 结果 |
+|----------|------|------|
+| Ruff Lint | 全量 backend/ | 0 issues |
+| Pytest 单元测试 | 17 cases (json_utils) | 17/17 PASS |
+| REST API 集成 | 10 个端点 | 10/10 PASS |
+| WebSocket 连通 | 连接 + 保持 | PASS |
+| 并发压力 | 120 req (50+50+20) | 341 req/s, 0 error |
+| 前端渲染 | 3 页面 + 7 JS chunk + CSS | 全部 200 |
+| 全链路 E2E | 创建→启动→Agent→Artifact→Token→暂停→前端 | 10/10 PASS |
+
+### 关键发现
+1. **API 性能稳定**：50 并发 GET 请求 p99 仅 205ms，POST p99 仅 116ms，FastAPI async 栈无压力
+2. **全链路完整**：从项目创建到 Agent 执行到 Artifact 产出到 Token 计费，每一环都正常工作
+3. **S2 限流处理有效**：429 触发后 backoff + arXiv fallback 正确执行，不影响研究流程
+4. **L0/L1/L2 多分辨率正常**：3 个 artifact 每个都生成了三级摘要
+5. **Ruff 格式化差异**：6 个已改动文件有格式差异，非阻塞但建议统一
+
+### 教训
+- **宿主机 localhost 可能被代理拦截**：测试脚本应从容器内执行（`docker compose exec`），避免 502 误报
+- **压力测试应自带清理**：20 个 POST 请求创建了 20 个 Stress 项目，需要手动清理。建议压力测试脚本自带 teardown
+- **ruff/pytest 未安装在 Docker 镜像中**：需要手动 pip install，应加入 pyproject.toml dev 依赖或 Dockerfile
