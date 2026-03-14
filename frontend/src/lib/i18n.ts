@@ -53,6 +53,7 @@ const dict = {
   "action.start": { zh: "开始", en: "Start" },
   "action.pause": { zh: "暂停", en: "Pause" },
   "action.resume": { zh: "恢复", en: "Resume" },
+  "action.confirm": { zh: "确认", en: "Confirm" },
   "action.download": { zh: "下载", en: "Download" },
   "action.collapse": { zh: "收起", en: "Collapse" },
   "action.showMore": { zh: "展开更多", en: "Show more" },
@@ -79,6 +80,7 @@ const dict = {
   "status.researchComplete": { zh: "研究完成", en: "Research Complete" },
   "status.researchPaused": { zh: "研究已暂停", en: "Research Paused" },
   "status.synthesizing": { zh: "综合中…", en: "Synthesizing…" },
+  "status.loading": { zh: "加载中…", en: "Loading…" },
 
   // ─── Section Headings ─────────────────────────────────
   "section.researchPipeline": { zh: "研究流水线", en: "Research Pipeline" },
@@ -114,6 +116,60 @@ const dict = {
   "empty.researchInProgress": { zh: "研究进行中", en: "Research in progress" },
   "empty.paperWhenComplete": { zh: "研究完成后论文将可用", en: "The paper will be available once the research is complete" },
 
+  // ─── Settings Labels ─────────────────────────────────
+  "settings.deepseekApiKey": { zh: "DeepSeek API 密钥", en: "DeepSeek API Key" },
+  "settings.openrouterApiKey": { zh: "OpenRouter API 密钥", en: "OpenRouter API Key" },
+  "settings.anthropicApiKey": { zh: "Anthropic API 密钥", en: "Anthropic API Key" },
+  "settings.anthropicBaseUrl": { zh: "Anthropic 接口地址", en: "Anthropic Base URL" },
+  "settings.s2ApiKey": { zh: "Semantic Scholar API 密钥", en: "Semantic Scholar API Key" },
+  "settings.enableWebRetrieval": { zh: "启用网络检索", en: "Enable Web Retrieval" },
+  "settings.enableWebRetrievalDesc": { zh: "允许 Librarian 从 arXiv/Semantic Scholar 检索论文", en: "Allow Librarian to retrieve papers from arXiv/Semantic Scholar" },
+
+  // ─── Agent Role Labels ──────────────────────────────
+  "agent.director": { zh: "总监", en: "Director" },
+  "agent.scientist": { zh: "科学家", en: "Scientist" },
+  "agent.librarian": { zh: "文献员", en: "Librarian" },
+  "agent.writer": { zh: "撰稿人", en: "Writer" },
+  "agent.critic": { zh: "评审员", en: "Critic" },
+  "agent.synthesizer": { zh: "综合员", en: "Synthesizer" },
+
+  // ─── Model Presets ──────────────────────────────────
+  "preset.label": { zh: "快捷预设", en: "Quick Presets" },
+  "preset.free": { zh: "免费", en: "Free" },
+  "preset.freeDesc": { zh: "零成本体验", en: "Zero cost" },
+  "preset.economy": { zh: "经济", en: "Economy" },
+  "preset.economyDesc": { zh: "DeepSeek ~0.3元/次", en: "DeepSeek ~$0.04/run" },
+  "preset.balanced": { zh: "均衡", en: "Balanced" },
+  "preset.balancedDesc": { zh: "多厂商 ~1元/次", en: "Multi-vendor ~$0.15/run" },
+  "preset.quality": { zh: "质量", en: "Quality" },
+  "preset.qualityDesc": { zh: "中文最强 ~5元/次", en: "Best Chinese ~$0.60/run" },
+  "preset.premium": { zh: "旗舰", en: "Premium" },
+  "preset.premiumDesc": { zh: "全球最强 ~45元/次", en: "Global best ~$6/run" },
+  "preset.custom": { zh: "自定义配置", en: "Custom configuration" },
+  "preset.noModels": { zh: "请先在上方配置至少一个 API 密钥", en: "Please configure at least one API key above" },
+  "preset.costUnit": { zh: "元/次", en: "RMB/run" },
+  "preset.showDetail": { zh: "查看详情", en: "Details" },
+  "preset.hideDetail": { zh: "收起详情", en: "Hide" },
+  "preset.detailCost": { zh: "单次成本:", en: "Cost/run:" },
+  "preset.detailAgents": { zh: "模型配置:", en: "Models:" },
+  "preset.detailTraits": { zh: "特点:", en: "Traits:" },
+  "preset.selectForProject": { zh: "模型预设", en: "Model Preset" },
+  "preset.perLane": { zh: "通道 {lane} 预设", en: "Lane {lane} Preset" },
+  "preset.saveCustom": { zh: "保存为自定义预设", en: "Save as Custom Preset" },
+  "preset.customName": { zh: "预设名称", en: "Preset Name" },
+  "preset.customNamePlaceholder": { zh: "例如：我的研究预设", en: "e.g. My Research Preset" },
+  "preset.deleteCustom": { zh: "删除自定义预设", en: "Delete custom preset" },
+  "preset.customPresets": { zh: "自定义预设", en: "Custom Presets" },
+
+  // ─── Model Tags ─────────────────────────────────────
+  "tag.free": { zh: "免费", en: "Free" },
+  "tag.economy": { zh: "经济", en: "Economy" },
+  "tag.value": { zh: "性价比", en: "Value" },
+  "tag.flagship": { zh: "旗舰", en: "Flagship" },
+  "tag.premium": { zh: "高端", en: "Premium" },
+  "tag.priceWarning": { zh: "此模型费用较高（约 ${price}/百万 token），确定使用吗？", en: "This model is expensive (~${price}/M tokens). Continue?" },
+  "tag.priceWarningTitle": { zh: "高价模型提醒", en: "Expensive Model Warning" },
+
   // ─── Form Labels & Placeholders ───────────────────────
   "form.searchProjects": { zh: "搜索项目…", en: "Search projects…" },
   "form.projectName": { zh: "项目名称", en: "Project Name" },
@@ -121,8 +177,7 @@ const dict = {
   "form.researchTopic": { zh: "研究课题", en: "Research Topic" },
   "form.researchTopicPlaceholder": { zh: "描述您想要研究的内容…", en: "Describe what you want to research…" },
   "form.parallelLanes": { zh: "并行通道", en: "Parallel Lanes" },
-  "form.defaultModel": { zh: "默认模型", en: "Default Model" },
-  "form.orchestratorModel": { zh: "编排模型", en: "Orchestrator Model" },
+  "form.embeddingModel": { zh: "向量模型", en: "Embedding" },
   "form.useDefault": { zh: "使用默认", en: "Use default" },
 
   // ─── Confirm/Modal ────────────────────────────────────
@@ -149,6 +204,8 @@ const dict = {
   "misc.iter": { zh: "迭代", en: "Iter" },
   "misc.parallelLanes": { zh: "并行通道", en: "Parallel Lanes" },
   "misc.lane": { zh: "通道", en: "Lane" },
+  "lane.tab": { zh: "通道 {n}", en: "Lane {n}" },
+  "lane.synthesis": { zh: "综合", en: "Synthesis" },
   "misc.allRoles": { zh: "全部角色", en: "All roles" },
   "misc.all": { zh: "全部", en: "All" },
   "misc.open": { zh: "未解决", en: "Open" },
@@ -172,7 +229,7 @@ export type I18nKey = keyof typeof dict;
 
 export function t(key: I18nKey, locale: Locale, params?: Record<string, string | number>): string {
   const entry = dict[key];
-  let text = entry?.[locale] ?? key;
+  let text: string = entry?.[locale] ?? key;
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       text = text.replace(`{${k}}`, String(v));

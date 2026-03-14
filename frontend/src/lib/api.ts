@@ -1,5 +1,12 @@
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+function getApiBase(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+  if (typeof window !== "undefined") {
+    return `${window.location.protocol}//${window.location.hostname}:30001`;
+  }
+  return "http://localhost:30001";
+}
+
+const API_BASE = getApiBase();
 
 async function request<T>(
   path: string,
@@ -27,6 +34,10 @@ export interface CreateProjectPayload {
   research_topic: string;
   concurrency?: number;
   paper_ids?: string[];
+  config_json?: {
+    lane_overrides?: Record<string, string>[];
+    embedding_model?: string;
+  };
 }
 
 export function createProject(payload: CreateProjectPayload) {
@@ -189,12 +200,25 @@ export function updateSettings(settings: Record<string, unknown>) {
 
 // --- Blackboard ---
 
-export function getBlackboard(projectId: string) {
+export function getBlackboard(projectId: string, lane?: number) {
+  const params = lane !== undefined ? `?lane=${lane}` : "";
   return request<{
     artifacts: Record<string, { id: string; type: string; data: Record<string, unknown> }[]>;
     challenges: { id: string; from: string; message: string; resolved: boolean }[];
     messages: { id: string; role: string; content: string; timestamp: string }[];
-  }>(`/api/projects/${projectId}/blackboard`);
+  }>(`/api/projects/${projectId}/blackboard${params}`);
+}
+
+// --- Lane Statuses ---
+
+export interface LaneStatus {
+  lane: number;
+  phase: string;
+  iteration: number;
+}
+
+export function getLaneStatuses(projectId: string) {
+  return request<LaneStatus[]>(`/api/projects/${projectId}/lanes`);
 }
 
 // --- Citation Graph ---

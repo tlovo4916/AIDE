@@ -42,6 +42,9 @@ yarn-error.log*
 .env
 .env.*
 
+# Next.js build output
+frontend/.next/
+
 # Build artifacts
 *.o
 *.so

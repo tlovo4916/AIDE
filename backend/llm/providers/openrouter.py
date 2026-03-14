@@ -12,9 +12,31 @@ from backend.llm.models import LLMResponse
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 MODEL_MAP: dict[str, str] = {
+    # --- Frontier ---
+    "gpt-5.4": "openai/gpt-5.4",
+    "gpt-5.4-pro": "openai/gpt-5.4-pro",
+    "gemini-3.1-pro": "google/gemini-3.1-pro-preview",
+    "grok-4": "x-ai/grok-4",
+    # --- Value / Mid-tier ---
+    "qwen3.5-plus": "qwen/qwen3.5-plus-02-15",
+    "minimax-m2.5": "minimax/minimax-m2.5",
+    "glm-5": "z-ai/glm-5",
+    "deepseek-v3.2-speciale": "deepseek/deepseek-v3.2-speciale",
+    "grok-4.1-fast": "x-ai/grok-4.1-fast",
+    "kimi-k2.5": "moonshotai/kimi-k2.5",
+    "qwen3.5-flash": "qwen/qwen3.5-flash-02-23",
+    "qwen3.5-397b": "qwen/qwen3.5-397b-a17b",
+    # --- Budget ---
+    "step-3.5-flash": "stepfun/step-3.5-flash:free",
+    "seed-1.6-flash": "bytedance-seed/seed-1.6-flash",
+    "gpt-5-nano": "openai/gpt-5-nano",
+    "glm-4.7-flash": "z-ai/glm-4.7-flash",
+    "mimo-v2-flash": "xiaomi/mimo-v2-flash",
+    "llama-4-maverick": "meta-llama/llama-4-maverick",
+    # --- Legacy aliases ---
     "gemini-pro": "google/gemini-3.1-pro-preview",
-    "gpt": "openai/gpt-5.3-codex",
-    "opus": "anthropic/claude-opus-4.6",
+    "gpt": "openai/gpt-5.4",
+    "opus": "anthropic/claude-opus-4",
 }
 
 

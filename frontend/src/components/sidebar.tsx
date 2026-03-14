@@ -182,7 +182,7 @@ export function Sidebar() {
       {/* Bottom: Version + Collapse */}
       <div className="px-3 py-3 flex items-center justify-between" style={{ borderTop: '1px solid var(--aide-sidebar-border)' }}>
         {!collapsed && (
-          <p className="text-xs text-aide-sidebar-text-muted truncate">AIDE v1.0</p>
+          <p className="text-xs text-aide-sidebar-text-muted truncate">AIDE v0.1</p>
         )}
         <button
           onClick={() => setCollapsed((c) => !c)}

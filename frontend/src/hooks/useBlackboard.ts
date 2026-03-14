@@ -48,7 +48,7 @@ type WsHook = {
   send: (event: string, payload: unknown, requestId?: string) => void;
 };
 
-export function useBlackboard(ws: WsHook, projectId: string) {
+export function useBlackboard(ws: WsHook, projectId: string, lane?: number | "synthesis") {
   const [state, setState] = useState<BlackboardState>({
     artifacts: {},
     messages: [],
@@ -57,23 +57,34 @@ export function useBlackboard(ws: WsHook, projectId: string) {
     isLoading: true,
   });
 
+  // Convert lane to API param: "synthesis" → no lane (reads main workspace)
+  const apiLane = typeof lane === "number" ? lane : undefined;
+
   // 页面挂载时从 REST 端点加载历史状态（支持刷新后恢复）
+  // Uses a cancelled flag to prevent stale fetches from overwriting fresh data
+  // (e.g., when apiLane changes rapidly from undefined→0 on multi-lane project load)
   useEffect(() => {
     if (!projectId) return;
-    getBlackboard(projectId)
+    let cancelled = false;
+    // Clear artifacts to prevent showing stale data from previous lane
+    setState({ artifacts: {}, messages: [], challenges: [], currentPhase: "", isLoading: true });
+    getBlackboard(projectId, apiLane)
       .then((snapshot) => {
-        setState((prev) => ({
-          ...prev,
+        if (cancelled) return;
+        setState({
           artifacts: snapshot.artifacts as Record<string, Artifact[]>,
           challenges: snapshot.challenges,
           messages: snapshot.messages,
+          currentPhase: "",
           isLoading: false,
-        }));
+        });
       })
       .catch(() => {
+        if (cancelled) return;
         setState((prev) => ({ ...prev, isLoading: false }));
       });
-  }, [projectId]);
+    return () => { cancelled = true; };
+  }, [projectId, apiLane]);
 
   const initialLoadDone = useRef(false);
 
@@ -83,8 +94,22 @@ export function useBlackboard(ws: WsHook, projectId: string) {
     }
   }, [ws.status]);
 
+  // Filter WS events by lane_index: when viewing a specific lane, only accept
+  // events from that lane; when viewing synthesis/main, only accept events
+  // without lane_index.
+  const shouldAcceptEvent = useCallback(
+    (payload: Record<string, unknown>): boolean => {
+      const eventLane = payload.lane_index as number | undefined;
+      if (typeof lane === "number") return eventLane === lane;
+      // synthesis or no lane selected → accept events without lane_index
+      return eventLane === undefined || eventLane === null;
+    },
+    [lane]
+  );
+
   const handleArtifactUpdated = useCallback(
     (payload: ArtifactUpdatedPayload) => {
+      if (!shouldAcceptEvent(payload as unknown as Record<string, unknown>)) return;
       setState((prev) => {
         const type = payload.artifact_type;
         const existing = prev.artifacts[type] ?? [];
@@ -115,11 +140,12 @@ export function useBlackboard(ws: WsHook, projectId: string) {
         };
       });
     },
-    []
+    [shouldAcceptEvent]
   );
 
   const handleChallengeRaised = useCallback(
     (payload: ChallengeRaisedPayload) => {
+      if (!shouldAcceptEvent(payload as unknown as Record<string, unknown>)) return;
       setState((prev) => ({
         ...prev,
         challenges: [
@@ -133,11 +159,12 @@ export function useBlackboard(ws: WsHook, projectId: string) {
         ],
       }));
     },
-    []
+    [shouldAcceptEvent]
   );
 
   const handleChallengeResolved = useCallback(
     (payload: ChallengeResolvedPayload) => {
+      if (!shouldAcceptEvent(payload as unknown as Record<string, unknown>)) return;
       setState((prev) => ({
         ...prev,
         challenges: prev.challenges.map((c) =>
@@ -145,18 +172,20 @@ export function useBlackboard(ws: WsHook, projectId: string) {
         ),
       }));
     },
-    []
+    [shouldAcceptEvent]
   );
 
   const handlePhaseAdvanced = useCallback(
     (payload: PhaseAdvancedPayload) => {
+      if (!shouldAcceptEvent(payload as unknown as Record<string, unknown>)) return;
       setState((prev) => ({ ...prev, currentPhase: payload.phase }));
     },
-    []
+    [shouldAcceptEvent]
   );
 
   const handleAgentActivity = useCallback(
     (payload: { agent?: string; action?: string; timestamp?: string }) => {
+      if (!shouldAcceptEvent(payload as unknown as Record<string, unknown>)) return;
       if (!payload.agent || !payload.action) return;
       setState((prev) => ({
         ...prev,
@@ -171,7 +200,7 @@ export function useBlackboard(ws: WsHook, projectId: string) {
         ],
       }));
     },
-    []
+    [shouldAcceptEvent]
   );
 
   useEffect(() => {

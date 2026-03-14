@@ -41,6 +41,20 @@ WRITE_PERMISSIONS: dict[AgentRole, set[ArtifactType]] = {
     AgentRole.SYNTHESIZER: {ArtifactType.DRAFT, ArtifactType.OUTLINE},
 }
 
+# Strict allowed types per role — used for runtime correction (narrower than WRITE_PERMISSIONS)
+_ROLE_ALLOWED_TYPES: dict[AgentRole, set[ArtifactType]] = {
+    AgentRole.DIRECTOR: {ArtifactType.DIRECTIONS},
+    AgentRole.SCIENTIST: {
+        ArtifactType.HYPOTHESES,
+        ArtifactType.EVIDENCE_GAPS,
+        ArtifactType.EXPERIMENT_GUIDE,
+    },
+    AgentRole.LIBRARIAN: {ArtifactType.EVIDENCE_FINDINGS, ArtifactType.TREND_SIGNALS},
+    AgentRole.WRITER: {ArtifactType.OUTLINE, ArtifactType.DRAFT},
+    AgentRole.CRITIC: {ArtifactType.REVIEW},
+    AgentRole.SYNTHESIZER: {ArtifactType.DRAFT},
+}
+
 
 class ActionExecutor:
     async def execute(self, action: BlackboardAction, board: Blackboard) -> None:
@@ -127,6 +141,21 @@ class ActionExecutor:
                 action.agent_role.value,
                 artifact_type.value,
             )
+
+        # --- Layer 3: enforce per-role artifact_type whitelist ---
+        allowed = _ROLE_ALLOWED_TYPES.get(action.agent_role)
+        if allowed and artifact_type not in allowed:
+            corrected = role_default.get(action.agent_role, artifact_type)
+            logger.warning(
+                "_exec_write_artifact: %s tried to write %r, corrected to %r"
+                " (not in allowed: %s)",
+                action.agent_role.value,
+                artifact_type.value,
+                corrected.value,
+                [a.value for a in allowed],
+            )
+            artifact_type = corrected
+
         artifact_id = c.get("artifact_id", str(uuid.uuid4()))
         version = c.get(
             "version",
@@ -150,15 +179,42 @@ class ActionExecutor:
     @staticmethod
     async def _exec_post_message(action: BlackboardAction, board: Blackboard) -> None:
         c = action.content
-        to_agent = AgentRole(c["to_agent"]) if c.get("to_agent") else None
-        msg = Message(
-            message_id=c.get("message_id", str(uuid.uuid4())),
-            from_agent=action.agent_role,
-            to_agent=to_agent,
-            content=c.get("text", ""),
-            refs=c.get("refs", []),
-        )
-        await board.post_message(msg)
+        to_agent = None
+        if c.get("to_agent"):
+            try:
+                to_agent = AgentRole(c["to_agent"])
+            except ValueError:
+                logger.warning(
+                    "_exec_post_message: invalid to_agent %r, ignoring",
+                    c["to_agent"],
+                )
+        # LLM may use "text", "content", or "message" for the body
+        text = c.get("text") or c.get("content") or c.get("message") or ""
+        if isinstance(text, dict):
+            text = json.dumps(text, ensure_ascii=False)
+        elif not isinstance(text, str):
+            text = str(text)
+        # Ensure refs is a list of strings
+        refs = c.get("refs", [])
+        if not isinstance(refs, list):
+            refs = [str(refs)] if refs else []
+        else:
+            refs = [str(r) for r in refs]
+        try:
+            msg = Message(
+                message_id=c.get("message_id", str(uuid.uuid4())),
+                from_agent=action.agent_role,
+                to_agent=to_agent,
+                content=text[:5000],  # prevent excessively long messages
+                refs=refs,
+            )
+            await board.post_message(msg)
+        except Exception as exc:
+            logger.warning(
+                "_exec_post_message: validation failed for %s: %s",
+                action.agent_role.value,
+                exc,
+            )
 
     @staticmethod
     async def _exec_raise_challenge(action: BlackboardAction, board: Blackboard) -> None:

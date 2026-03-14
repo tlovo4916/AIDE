@@ -41,6 +41,7 @@ Respond with a **valid JSON object** using this structure:
             "action_type": "<one of: write_artifact, post_message, raise_challenge, request_info, spawn_subagent>",
             "target": "<artifact id or recipient>",
             "content": {
+                "artifact_type": "hypotheses",
                 "hypothesis": "...",
                 "methodology": "...",
                 "confidence": 0.0
@@ -64,6 +65,8 @@ action_type values:
 - raise_challenge -- formally challenge another agent's artifact
 - request_info -- request specific data or analysis
 - spawn_subagent -- delegate a focused subtask
+
+**IMPORTANT**: EVERY write_artifact action MUST include `"artifact_type"` in `content`, set to one of: `"hypotheses"`, `"evidence_gaps"`, `"experiment_guide"`. Never omit this field.
 
 {% if research_topic %}
 ## ⚠️ RESEARCH TOPIC — THIS IS YOUR SOLE FOCUS

@@ -15,9 +15,9 @@ docker compose down -v  # Stop and remove data volumes
 ```bash
 docker compose logs -f backend
 docker compose logs -f frontend
-# 从容器内测试 API（宿主机 localhost:8000 可能被代理拦截返回 502）
+# 从容器内测试 API（宿主机 localhost:30001 可能被代理拦截返回 502）
 docker compose exec backend python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health').read())"
-open http://localhost:8000/docs   # FastAPI Swagger UI
+open http://localhost:30001/docs   # FastAPI Swagger UI
 ```
 
 ### Linting & Tests (run inside container)
@@ -29,10 +29,10 @@ docker compose exec frontend npm run lint
 ```
 
 ### Service Ports
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
-- ChromaDB: http://localhost:8100
-- PostgreSQL: localhost:5433
+- Frontend: http://localhost:30000
+- Backend API: http://localhost:30001
+- ChromaDB: http://localhost:30002
+- PostgreSQL: localhost:30003
 
 ---
 

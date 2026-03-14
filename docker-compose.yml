@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "30001:8000"
     environment:
       AIDE_DATABASE_URL: "postgresql+asyncpg://aide:aide@postgres:5432/aide"
       AIDE_CHROMA_PERSIST_DIR: "/app/workspace/.chroma"
@@ -29,7 +29,7 @@ services:
       POSTGRES_PASSWORD: aide
       POSTGRES_DB: aide
     ports:
-      - "5433:5432"
+      - "30003:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -42,7 +42,7 @@ services:
   chromadb:
     image: chromadb/chroma:latest
     ports:
-      - "8100:8000"
+      - "30002:8000"
     volumes:
       - chromadata:/chroma/chroma
     environment:
@@ -54,9 +54,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
-    environment:
-      NEXT_PUBLIC_API_URL: "http://localhost:8000"
+      - "30000:3000"
     volumes:
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public

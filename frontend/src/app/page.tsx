@@ -3,8 +3,16 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Plus, FlaskConical, Calendar, Clock, Loader2, Trash2 } from "lucide-react";
-import { listProjects, createProject, deleteProject } from "@/lib/api";
+import { Plus, FlaskConical, Calendar, Clock, Loader2, Trash2, Zap, Sparkles, Crown, Gift, Star } from "lucide-react";
+import { listProjects, createProject, deleteProject, getSettings, type CreateProjectPayload } from "@/lib/api";
+import {
+  PRESET_OVERRIDES,
+  PRESET_DETAILS,
+  AGENT_ROLE_KEYS,
+  type BuiltinPresetKey,
+  type PresetConfig,
+  type CustomPresetData,
+} from "@/lib/presets";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -178,6 +186,88 @@ export default function DashboardPage() {
 
 /* ─── Create Project Modal ─────────────────────────────────────── */
 
+type PresetOption = BuiltinPresetKey | string;
+
+const PRESET_BUTTON_CONFIG: { key: BuiltinPresetKey; icon: typeof Zap; color: string; border: string; bg: string }[] = [
+  { key: "free", icon: Gift, color: "text-aide-accent-cyan", border: "border-aide-accent-cyan", bg: "bg-aide-accent-cyan/10" },
+  { key: "economy", icon: Zap, color: "text-aide-accent-green", border: "border-aide-accent-green", bg: "bg-aide-accent-green/10" },
+  { key: "balanced", icon: Sparkles, color: "text-aide-accent-blue", border: "border-aide-accent-blue", bg: "bg-aide-accent-blue/10" },
+  { key: "quality", icon: Star, color: "text-aide-accent-amber", border: "border-aide-accent-amber", bg: "bg-aide-accent-amber/10" },
+  { key: "premium", icon: Crown, color: "text-aide-accent-purple", border: "border-aide-accent-purple", bg: "bg-aide-accent-purple/10" },
+];
+
+function PresetPicker({
+  value,
+  onChange,
+  label,
+  customPresets,
+  locale,
+  t,
+}: {
+  value: PresetOption;
+  onChange: (v: PresetOption) => void;
+  label?: string;
+  customPresets: Record<string, CustomPresetData>;
+  locale: "zh" | "en";
+  t: (key: I18nKey, params?: Record<string, string | number>) => string;
+}) {
+  return (
+    <div>
+      {label && (
+        <label className="mb-1.5 block text-sm font-medium text-aide-text-secondary">{label}</label>
+      )}
+      <div className="flex flex-wrap gap-1.5">
+        {/* Built-in presets */}
+        {PRESET_BUTTON_CONFIG.map(({ key, icon: Icon, color, border, bg }) => {
+          const isActive = value === key;
+          const detail = PRESET_DETAILS[key];
+          return (
+            <button
+              key={key}
+              onClick={() => onChange(key)}
+              className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-all ${
+                isActive
+                  ? `${border} ${bg} font-medium ${color}`
+                  : `border-aide-border bg-aide-bg-secondary text-aide-text-primary hover:border-aide-primary/40`
+              }`}
+              title={detail.agents[locale]}
+            >
+              <Icon className={`h-3 w-3 ${isActive ? color : "text-aide-text-muted"}`} />
+              {t(`preset.${key}` as I18nKey)}
+              <span className={`text-[10px] ${isActive ? color + " opacity-70" : "text-aide-text-muted"}`}>
+                {detail.cost[locale]}
+              </span>
+            </button>
+          );
+        })}
+        {/* Custom presets */}
+        {Object.keys(customPresets).map((cpName) => {
+          const desc = customPresets[cpName]?.description;
+          return (
+            <button
+              key={`custom-${cpName}`}
+              onClick={() => onChange(cpName)}
+              className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-all ${
+                value === cpName
+                  ? "border-aide-accent-teal bg-aide-accent-teal/10 font-medium text-aide-accent-teal"
+                  : "border-aide-border bg-aide-bg-secondary text-aide-text-primary hover:border-aide-accent-teal/40"
+              }`}
+            >
+              <Sparkles className={`h-3 w-3 ${value === cpName ? "text-aide-accent-teal" : "text-aide-text-muted"}`} />
+              {cpName}
+              {desc && (
+                <span className={`text-[10px] ${value === cpName ? "text-aide-accent-teal opacity-70" : "text-aide-text-muted"}`}>
+                  {desc}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function CreateProjectModal({
   isOpen,
   onClose,
@@ -187,17 +277,93 @@ function CreateProjectModal({
   onClose: () => void;
   onCreate: (id: string) => void;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [name, setName] = useState("");
   const [topic, setTopic] = useState("");
   const [concurrency, setConcurrency] = useState(1);
   const [creating, setCreating] = useState(false);
 
+  // Preset selection: a builtin preset key or custom preset name
+  const [globalPreset, setGlobalPreset] = useState<PresetOption>("economy");
+  // Per-lane overrides (only used when concurrency > 1 and user wants different presets per lane)
+  const [lanePresets, setLanePresets] = useState<PresetOption[]>([]);
+  const [perLaneMode, setPerLaneMode] = useState(false);
+  const [customPresets, setCustomPresets] = useState<Record<string, CustomPresetData>>({});
+
+  // Fetch custom presets from settings on open
+  useEffect(() => {
+    if (isOpen) {
+      getSettings()
+        .then((data) => {
+          const cp = (data as Record<string, unknown>).custom_presets;
+          if (cp && typeof cp === "object") {
+            setCustomPresets(cp as Record<string, CustomPresetData>);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [isOpen]);
+
+  // Sync lane presets array length with concurrency
+  useEffect(() => {
+    setLanePresets((prev) => {
+      const arr = [...prev];
+      while (arr.length < concurrency) arr.push(globalPreset);
+      return arr.slice(0, concurrency);
+    });
+  }, [concurrency, globalPreset]);
+
+  function resolveConfig(presetKey: PresetOption): { agents: PresetConfig; embedding?: string } | null {
+    if (presetKey in PRESET_OVERRIDES) {
+      const preset = PRESET_OVERRIDES[presetKey as BuiltinPresetKey];
+      return { agents: preset, embedding: preset.embedding };
+    }
+    if (presetKey in customPresets) {
+      const ov = customPresets[presetKey].overrides;
+      return { agents: ov, embedding: ov.embedding };
+    }
+    return null;
+  }
+
   async function handleCreate() {
     if (!name.trim() || !topic.trim()) return;
     setCreating(true);
     try {
-      const { id } = await createProject({ name: name.trim(), research_topic: topic.trim(), concurrency });
+      // Build lane_overrides array and extract embedding model
+      let laneOverrides: Record<string, string>[] | undefined;
+      let embeddingModel: string | undefined;
+      if (concurrency <= 1) {
+        const resolved = resolveConfig(globalPreset);
+        if (resolved) {
+          laneOverrides = [resolved.agents];
+          embeddingModel = resolved.embedding;
+        }
+      } else if (perLaneMode) {
+        laneOverrides = lanePresets.map((lp) => {
+          const r = resolveConfig(lp);
+          return r ? r.agents : {};
+        });
+        // Use first lane's embedding as project-level default
+        const firstResolved = resolveConfig(lanePresets[0] ?? "");
+        embeddingModel = firstResolved?.embedding;
+      } else {
+        const resolved = resolveConfig(globalPreset);
+        if (resolved) {
+          laneOverrides = Array(concurrency).fill(resolved.agents);
+          embeddingModel = resolved.embedding;
+        }
+      }
+
+      const configJson: Record<string, unknown> = {};
+      if (laneOverrides) configJson.lane_overrides = laneOverrides;
+      if (embeddingModel) configJson.embedding_model = embeddingModel;
+
+      const { id } = await createProject({
+        name: name.trim(),
+        research_topic: topic.trim(),
+        concurrency,
+        config_json: Object.keys(configJson).length > 0 ? configJson as CreateProjectPayload["config_json"] : undefined,
+      });
       onCreate(id);
     } finally {
       setCreating(false);
@@ -205,8 +371,8 @@ function CreateProjectModal({
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={t("modal.newProject")} size="md">
-      <div className="space-y-3">
+    <Modal isOpen={isOpen} onClose={onClose} title={t("modal.newProject")} size="lg">
+      <div className="space-y-4">
         <Input
           label={t("form.projectName")}
           value={name}
@@ -219,6 +385,23 @@ function CreateProjectModal({
           onChange={(e) => setTopic(e.target.value)}
           placeholder={t("form.researchTopicPlaceholder")}
         />
+
+        {/* Model Preset */}
+        <PresetPicker
+          value={globalPreset}
+          onChange={(v) => {
+            setGlobalPreset(v);
+            if (!perLaneMode) {
+              setLanePresets((prev) => prev.map(() => v));
+            }
+          }}
+          label={t("preset.selectForProject" as I18nKey)}
+          customPresets={customPresets}
+          locale={locale}
+          t={t}
+        />
+
+        {/* Concurrency slider */}
         <div>
           <label className="mb-1 block text-sm font-medium text-aide-text-secondary">
             {t("form.parallelLanes")} ({concurrency})
@@ -236,6 +419,47 @@ function CreateProjectModal({
             <span>{t("form.maxParallel")}</span>
           </div>
         </div>
+
+        {/* Per-lane preset overrides (only when concurrency > 1) */}
+        {concurrency > 1 && (
+          <div>
+            <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-aide-text-secondary">
+              <input
+                type="checkbox"
+                checked={perLaneMode}
+                onChange={(e) => {
+                  setPerLaneMode(e.target.checked);
+                  if (!e.target.checked) {
+                    setLanePresets((prev) => prev.map(() => globalPreset));
+                  }
+                }}
+                className="rounded accent-aide-primary"
+              />
+              {locale === "zh" ? "各通道使用不同预设" : "Different preset per lane"}
+            </label>
+            {perLaneMode && (
+              <div className="mt-2 space-y-2 rounded-lg border border-aide-border bg-aide-bg-tertiary/50 p-3">
+                {Array.from({ length: concurrency }, (_, i) => (
+                  <PresetPicker
+                    key={i}
+                    value={lanePresets[i] ?? ""}
+                    onChange={(v) => {
+                      setLanePresets((prev) => {
+                        const next = [...prev];
+                        next[i] = v;
+                        return next;
+                      });
+                    }}
+                    label={t("preset.perLane" as I18nKey, { lane: String(i + 1) })}
+                    customPresets={customPresets}
+                    locale={locale}
+                    t={t}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="mt-5 flex justify-end gap-2">
         <Button variant="ghost" size="md" onClick={onClose}>{t("action.cancel")}</Button>

@@ -497,11 +497,22 @@ class Blackboard:
         return float(phase_scores.get(phase.value, 0.0))
 
     async def set_phase_critic_score(self, phase: ResearchPhase, score: float) -> None:
-        """Persist the critic score for a specific phase."""
+        """Persist the critic score for a specific phase.
+
+        Uses max(existing, new) so scores don't regress within a phase —
+        convergence only cares about the best score achieved.
+        """
         meta = await self.get_project_meta()
         phase_scores = meta.get("phase_critic_scores", {})
-        phase_scores[phase.value] = score
+        existing = float(phase_scores.get(phase.value, 0.0))
+        final_score = max(existing, score)
+        phase_scores[phase.value] = final_score
         await self.update_project_meta(phase_critic_scores=phase_scores)
+        if final_score != score:
+            logger.info(
+                "[Board] Phase %s critic score kept at %.1f (incoming %.1f was lower)",
+                phase.value, final_score, score,
+            )
 
     async def get_recent_revision_count(self, rounds: int) -> int:
         """Count artifacts that have version > 1 (indicating revisions)."""

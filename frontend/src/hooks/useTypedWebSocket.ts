@@ -11,8 +11,16 @@ import {
 type ConnectionStatus = "connecting" | "connected" | "disconnected";
 type Listener = (payload: unknown) => void;
 
-const WS_BASE =
-  process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
+function getWsBase(): string {
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
+  if (typeof window !== "undefined") {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${window.location.hostname}:30001`;
+  }
+  return "ws://localhost:30001";
+}
+
+const WS_BASE = getWsBase();
 const HEARTBEAT_INTERVAL = 30_000;
 const RECONNECT_BASE_DELAY = 1000;
 const RECONNECT_MAX_DELAY = 30_000;

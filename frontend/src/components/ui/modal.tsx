@@ -51,8 +51,8 @@ export function Modal({ isOpen, onClose, title, size = "lg", children }: ModalPr
       }}
     >
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-      <div className={`relative z-10 w-full ${SIZE_CLASSES[size]} mx-4 rounded-xl border border-aide-border bg-aide-bg-secondary p-6 shadow-2xl animate-scale-in`}>
-        <div className="mb-4 flex items-center justify-between">
+      <div className={`relative z-10 flex w-full ${SIZE_CLASSES[size]} mx-4 max-h-[90vh] flex-col rounded-xl border border-aide-border bg-aide-bg-secondary shadow-2xl animate-scale-in`}>
+        <div className="flex shrink-0 items-center justify-between border-b border-aide-border/50 px-6 py-4">
           {title && (
             <h2 className="text-lg font-semibold text-aide-text-primary">
               {title}
@@ -65,7 +65,9 @@ export function Modal({ isOpen, onClose, title, size = "lg", children }: ModalPr
             <X className="h-4 w-4" />
           </button>
         </div>
-        {children}
+        <div className="overflow-y-auto px-6 py-4">
+          {children}
+        </div>
       </div>
     </div>
   );

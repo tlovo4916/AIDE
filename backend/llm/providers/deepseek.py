@@ -89,7 +89,14 @@ class DeepSeekProvider:
         )
 
         resp = await self._client.post(DEEPSEEK_API_URL, json=payload)
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            body = resp.text[:500]
+            log.error(
+                "DeepSeek API error: status=%d, body=%s",
+                resp.status_code,
+                body,
+            )
+            resp.raise_for_status()
         data = resp.json()
 
         choice = data["choices"][0]
@@ -103,12 +110,16 @@ class DeepSeekProvider:
             content = reasoning_content
 
         if not content:
-            log.warning(
-                "DeepSeek returned empty content for model=%s, finish_reason=%s, reasoning_len=%d",
+            log.error(
+                "DeepSeek returned empty content for model=%s, finish_reason=%s, "
+                "reasoning_len=%d, full_response_keys=%s",
                 model,
                 choice.get("finish_reason"),
                 len(reasoning_content),
+                list(data.keys()),
             )
+            if data.get("error"):
+                log.error("DeepSeek error detail: %s", data["error"])
 
         log.info(
             "DeepSeek response: model=%s, finish=%s, content_len=%d, "

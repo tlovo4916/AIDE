@@ -39,6 +39,7 @@ Respond with a **valid JSON object** using this structure:
             "action_type": "<one of: write_artifact, post_message, raise_challenge, request_info, spawn_subagent>",
             "target": "<artifact id or recipient>",
             "content": {
+                "artifact_type": "evidence_findings",
                 "findings": ["..."],
                 "sources": [{"title": "...", "url": "...", "year": 2025}],
                 "confidence": 0.0,
@@ -63,6 +64,8 @@ action_type values:
 - raise_challenge -- formally challenge a Scientist artifact
 - request_info -- request specific data
 - spawn_subagent -- delegate a focused search/verification subtask
+
+**IMPORTANT**: EVERY write_artifact action MUST include `"artifact_type"` in `content`, set to one of: `"evidence_findings"`, `"trend_signals"`. Never omit this field.
 
 {% if research_topic %}
 ## ⚠️ RESEARCH TOPIC — THIS IS YOUR SOLE FOCUS

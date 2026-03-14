@@ -30,6 +30,7 @@ Respond with a **valid JSON object** using this structure:
             "action_type": "<one of: write_artifact, post_message, resolve_challenge, request_info>",
             "target": "<artifact id or recipient agent>",
             "content": {
+                "artifact_type": "directions",
                 "title": "...",
                 "body": "...",
                 "priority": "critical | normal | exploratory"
@@ -45,6 +46,8 @@ action_type values:
 - post_message -- communicate with other agents or broadcast
 - resolve_challenge -- settle a dispute with a binding decision
 - request_info -- ask another agent for specific information
+
+**IMPORTANT**: EVERY write_artifact action MUST include `"artifact_type": "directions"` in `content`. Never omit this field.
 
 {% if research_topic %}
 ## ⚠️ RESEARCH TOPIC — THIS IS YOUR SOLE FOCUS

@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   Clock,
   Calendar,
-  TrendingUp,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,7 +16,7 @@ import { Markdown } from "@/components/ui/markdown";
 import { useLocale } from "@/contexts/LocaleContext";
 import type { I18nKey } from "@/lib/i18n";
 import { PHASES, formatDateTime, formatDateTimeFull, getArtifactDisplay } from "../_utils/formatters";
-import { useElapsedTime, type Project, type AgentEvent, type LaneState } from "../_hooks/useProjectState";
+import { useElapsedTime, type Project, type AgentEvent } from "../_hooks/useProjectState";
 import type { ProjectTokenUsage } from "@/lib/api";
 
 interface PhaseColor {
@@ -69,7 +68,6 @@ interface OverviewSectionProps {
   currentAgent: { agent: string; task: string } | null;
   currentIteration: number;
   agentEvents: AgentEvent[];
-  laneState: LaneState | null;
   tokenUsage: ProjectTokenUsage | null;
   actionLoading: boolean;
   onToggleRunning: () => void;
@@ -85,7 +83,6 @@ export function OverviewSection({
   currentAgent,
   currentIteration,
   agentEvents,
-  laneState,
   tokenUsage,
   actionLoading,
   onToggleRunning,
@@ -116,6 +113,13 @@ export function OverviewSection({
 
         <Card>
           <CardContent className="p-0">
+            {blackboard.isLoading ? (
+              <div className="flex items-center justify-center gap-2 py-12">
+                <Loader2 className="h-5 w-5 animate-spin text-aide-accent-blue" />
+                <span className="text-sm text-aide-text-muted">{t("status.loading")}</span>
+              </div>
+            ) : (
+            <>
             {/* Horizontal canvas area */}
             <div className="canvas-grid overflow-x-auto rounded-xl p-8">
               <div className="flex items-center gap-0 min-w-max">
@@ -214,48 +218,11 @@ export function OverviewSection({
                 <PhaseArtifacts phase={expandedPhase} artifacts={blackboard.artifacts} />
               </div>
             )}
+            </>
+            )}
           </CardContent>
         </Card>
       </div>
-
-      {/* Lane Progress */}
-      {laneState && laneState.total > 1 && (
-        <Card>
-          <CardContent>
-            <div className="flex items-center gap-2 mb-3">
-              <TrendingUp className="h-4 w-4 text-aide-accent-blue" />
-              <span className="text-sm font-medium text-aide-text-primary">
-                {laneState.synthesizing
-                  ? t("status.synthesizing")
-                  : `${t("misc.parallelLanes")} (${laneState.completed.length + laneState.errors.length}/${laneState.total})`}
-              </span>
-            </div>
-            <div className="flex gap-2">
-              {Array.from({ length: laneState.total }, (_, i) => {
-                const isDone = laneState.completed.includes(i);
-                const isError = laneState.errors.includes(i);
-                return (
-                  <div
-                    key={i}
-                    className={`flex-1 rounded-lg px-3 py-2 text-center text-xs font-medium ${
-                      isDone
-                        ? "bg-aide-accent-green/15 text-aide-accent-green"
-                        : isError
-                          ? "bg-red-500/15 text-red-400"
-                          : "bg-aide-accent-blue/10 text-aide-accent-blue"
-                    }`}
-                  >
-                    {t("misc.lane")} {i}
-                    {!isDone && !isError && (
-                      <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Token Usage & Time Info */}
       <div className="grid grid-cols-2 gap-4">

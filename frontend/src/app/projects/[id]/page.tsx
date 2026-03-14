@@ -22,6 +22,7 @@ import { BlackboardSection } from "./_components/BlackboardSection";
 import { MessagesSection } from "./_components/MessagesSection";
 import { KnowledgeSection } from "./_components/KnowledgeSection";
 import { PaperSection } from "./_components/PaperSection";
+import { LaneTabBar } from "./_components/LaneTabBar";
 
 export default function ProjectPage() {
   const params = useParams<{ id: string }>();
@@ -128,6 +129,16 @@ function ProjectContent({
         </div>
       </div>
 
+      {/* Lane Tab Bar (multi-lane only) */}
+      {state.activeLane !== null && (
+        <LaneTabBar
+          activeLane={state.activeLane}
+          onChangeLane={state.setActiveLane}
+          laneStatuses={state.laneStatuses}
+          laneState={state.laneState}
+        />
+      )}
+
       {/* Active Section */}
       {activeSection === "overview" && (
         <OverviewSection
@@ -135,7 +146,6 @@ function ProjectContent({
           currentAgent={state.currentAgent}
           currentIteration={state.currentIteration}
           agentEvents={state.agentEvents}
-          laneState={state.laneState}
           tokenUsage={state.tokenUsage}
           actionLoading={state.actionLoading}
           onToggleRunning={state.handleToggleRunning}

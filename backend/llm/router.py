@@ -27,7 +27,7 @@ DEFAULT_AGENT_MODEL: dict[AgentRole, str] = {
 DEEPSEEK_MODELS = {"deepseek-chat", "deepseek-reasoner"}
 ANTHROPIC_MODELS = {"claude-opus-4-6", "claude-sonnet-4-6"}
 
-FALLBACK_CHAIN: list[str] = ["deepseek-chat", "deepseek-reasoner"]
+FALLBACK_CHAIN: list[str] = ["deepseek-chat", "step-3.5-flash", "deepseek-reasoner"]
 
 
 class LLMRouter:
@@ -37,11 +37,13 @@ class LLMRouter:
         openrouter: OpenRouterProvider | None = None,
         anthropic: AnthropicProvider | None = None,
         tracker: TokenTracker | None = None,
+        agent_model_overrides: dict[str, str] | None = None,
     ) -> None:
         self._deepseek = deepseek or DeepSeekProvider()
         self._openrouter = openrouter or OpenRouterProvider()
         self._anthropic = anthropic or AnthropicProvider()
         self._tracker = tracker
+        self._local_overrides = agent_model_overrides
 
     async def close(self) -> None:
         await self._deepseek.close()
@@ -49,7 +51,8 @@ class LLMRouter:
         await self._anthropic.close()
 
     def _is_deepseek(self, model: str) -> bool:
-        return model in DEEPSEEK_MODELS or model.startswith("deepseek")
+        """Only direct DeepSeek API models. V3.2 Speciale is OpenRouter-only."""
+        return model in DEEPSEEK_MODELS
 
     def _is_anthropic(self, model: str) -> bool:
         return model in ANTHROPIC_MODELS or model.startswith("claude-")
@@ -68,12 +71,20 @@ class LLMRouter:
         return chain
 
     def resolve_model(self, role: AgentRole | str | None = None) -> str:
-        """Return the model string for a given agent role, respecting user overrides."""
-        overrides = settings.agent_model_overrides
+        """Return the model string for a given agent role.
+
+        Priority: local (per-project) overrides -> global user overrides -> role defaults -> global default.
+        """
         if role is not None:
             key = role.value if isinstance(role, AgentRole) else role
+            # 1. Per-project / per-lane local overrides (set via config_json)
+            if self._local_overrides and key in self._local_overrides and self._local_overrides[key]:
+                return self._local_overrides[key]
+            # 2. Global user overrides (from settings page)
+            overrides = settings.agent_model_overrides
             if overrides and key in overrides and overrides[key]:
                 return overrides[key]
+            # 3. Role defaults
             if isinstance(role, AgentRole):
                 return DEFAULT_AGENT_MODEL.get(role, settings.default_model)
         return settings.default_model

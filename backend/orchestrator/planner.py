@@ -93,6 +93,7 @@ _PHASE_TASKS: dict[ResearchPhase, dict[AgentRole, str]] = {
             " Leverage trend signals to identify hypotheses"
             " aligned with rising trends or emerging"
             " connections."
+            " You MUST write artifacts with artifact_type='hypotheses'."
         ),
         AgentRole.DIRECTOR: (
             "Review and refine the proposed hypotheses."
@@ -100,6 +101,7 @@ _PHASE_TASKS: dict[ResearchPhase, dict[AgentRole, str]] = {
             " research strategy. Consider trend signals when"
             " prioritizing — hypotheses aligned with rising"
             " trends may have higher impact."
+            " You MUST write artifacts with artifact_type='directions'."
         ),
         AgentRole.CRITIC: (
             "Evaluate the hypotheses for logical soundness,"
@@ -108,6 +110,7 @@ _PHASE_TASKS: dict[ResearchPhase, dict[AgentRole, str]] = {
         ),
         AgentRole.LIBRARIAN: (
             "Search for additional evidence to support or challenge the proposed hypotheses."
+            " You MUST write artifacts with artifact_type='evidence_findings'."
         ),
     },
     ResearchPhase.EVIDENCE: {
@@ -115,11 +118,13 @@ _PHASE_TASKS: dict[ResearchPhase, dict[AgentRole, str]] = {
             "Conduct targeted literature search to gather"
             " evidence for the hypotheses. Focus on"
             " experimental data and empirical findings."
+            " You MUST write artifacts with artifact_type='evidence_findings'."
         ),
         AgentRole.SCIENTIST: (
             "Analyze collected evidence and assess how well"
             " it supports or refutes the hypotheses."
             " Identify remaining gaps."
+            " You MUST write artifacts with artifact_type='evidence_gaps' or 'experiment_guide'."
         ),
         AgentRole.CRITIC: (
             "Review the evidence quality, methodology rigor,"
@@ -133,6 +138,7 @@ _PHASE_TASKS: dict[ResearchPhase, dict[AgentRole, str]] = {
             " accumulated evidence and hypotheses. Include"
             " introduction, methods, results, discussion,"
             " and conclusion."
+            " You MUST write artifacts with artifact_type='outline' or 'draft'."
         ),
         AgentRole.CRITIC: (
             "Review the draft for clarity, structure,"

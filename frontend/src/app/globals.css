@@ -15,6 +15,9 @@
   --aide-accent-amber: #d97706;
   --aide-accent-green: #16a34a;
   --aide-accent-red: #dc2626;
+  --aide-accent-purple: #7c3aed;
+  --aide-accent-cyan: #06b6d4;
+  --aide-accent-teal: #0d9488;
   --aide-border: #e2e8f0;
   --aide-border-focus: #4f46e5;
   --aide-code-bg: #e2e8f0;
@@ -59,6 +62,9 @@
   --aide-accent-amber: #f59e0b;
   --aide-accent-green: #22c55e;
   --aide-accent-red: #ef4444;
+  --aide-accent-purple: #a78bfa;
+  --aide-accent-cyan: #22d3ee;
+  --aide-accent-teal: #2dd4bf;
   --aide-border: #1e293b;
   --aide-border-focus: #818cf8;
   --aide-code-bg: #1e293b;
@@ -88,6 +94,9 @@
   --color-aide-accent-amber: var(--aide-accent-amber);
   --color-aide-accent-green: var(--aide-accent-green);
   --color-aide-accent-red: var(--aide-accent-red);
+  --color-aide-accent-purple: var(--aide-accent-purple);
+  --color-aide-accent-cyan: var(--aide-accent-cyan);
+  --color-aide-accent-teal: var(--aide-accent-teal);
   --color-aide-border: var(--aide-border);
   --color-aide-border-focus: var(--aide-border-focus);
 

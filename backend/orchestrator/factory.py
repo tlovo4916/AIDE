@@ -72,19 +72,23 @@ def _build_ws_broadcast(project_id: str):
 _UTIL_MODEL = "deepseek-chat"
 
 
-async def _fetch_project_info(project_id: str) -> tuple[str, int]:
-    """Fetch research_topic and concurrency from DB."""
+async def _fetch_project_info(
+    project_id: str,
+) -> tuple[str, int, dict | None]:
+    """Fetch research_topic, concurrency, and config_json from DB."""
     research_topic = ""
     concurrency = 1
+    config_json: dict | None = None
     try:
         async with async_session_factory() as session:
             project = await session.get(Project, project_id)
             if project:
                 research_topic = project.research_topic or ""
                 concurrency = getattr(project, "concurrency", 1) or 1
+                config_json = getattr(project, "config_json", None)
     except Exception:
         logger.warning("Failed to fetch project info for %s", project_id)
-    return research_topic, concurrency
+    return research_topic, concurrency, config_json
 
 
 async def _create_engine(
@@ -93,6 +97,8 @@ async def _create_engine(
     workspace_path: Path | None = None,
     research_topic: str = "",
     lane_index: int | None = None,
+    model_overrides: dict[str, str] | None = None,
+    embedding_model: str | None = None,
 ) -> OrchestrationEngine:
     """Assemble all dependencies and return a ready-to-run engine.
 
@@ -101,24 +107,27 @@ async def _create_engine(
         workspace_path: Override workspace path (used for lane workspaces).
         research_topic: Pre-fetched topic (avoids redundant DB queries for lanes).
         lane_index: If set, this engine is for a specific lane.
+        model_overrides: Per-project/per-lane agent model overrides (from config_json).
+        embedding_model: Per-project embedding model override (from config_json).
     """
     if workspace_path is None:
         workspace_path = settings.project_path(project_id)
 
     # Fetch research_topic from DB if not provided
     if not research_topic:
-        research_topic, _ = await _fetch_project_info(project_id)
+        research_topic, _, _ = await _fetch_project_info(project_id)
 
     lane_label = f" lane={lane_index}" if lane_index is not None else ""
     logger.info(
-        "[Factory] project=%s%s research_topic=%r",
+        "[Factory] project=%s%s research_topic=%r overrides=%s",
         project_id,
         lane_label,
         research_topic[:80],
+        list(model_overrides.keys()) if model_overrides else "global",
     )
 
     token_tracker = TokenTracker(async_session_factory)
-    llm_router = LLMRouter(tracker=token_tracker)
+    llm_router = LLMRouter(tracker=token_tracker, agent_model_overrides=model_overrides)
     action_executor = ActionExecutor()
 
     async def llm_call(messages: list[dict[str, str]]) -> str:
@@ -149,6 +158,7 @@ async def _create_engine(
             write_back_guard,
             research_topic=research_topic,
             project_id=str(project_id),
+            embedding_model=embedding_model,
         ),
         AgentRole.WRITER: WriterAgent(
             llm_router,
@@ -208,6 +218,7 @@ async def _create_engine(
         on_phase_change=_on_phase_change,
         trend_extractor=trend_extractor,
         token_tracker=token_tracker,
+        lane_index=lane_index,
     )
 
     subagent_pool = SubAgentPool(llm_router)
@@ -308,6 +319,32 @@ async def _run_synthesis(
         research_topic=research_topic,
     )
 
+    # Aggregate critic scores from all lanes into the synthesis board
+    # so the convergence detector starts with correct baseline
+    aggregated_scores: dict[str, float] = {}
+    for lane_idx in range(num_lanes):
+        lane_meta_path = project_path / "lanes" / str(lane_idx) / "meta.json"
+        if lane_meta_path.exists():
+            try:
+                lane_meta = json.loads(lane_meta_path.read_text())
+                lane_scores = lane_meta.get("phase_critic_scores", {})
+                for phase_key, score in lane_scores.items():
+                    existing = aggregated_scores.get(phase_key, 0.0)
+                    aggregated_scores[phase_key] = max(existing, float(score))
+            except Exception:
+                logger.warning(
+                    "[Factory] Failed to read lane %d meta for scores",
+                    lane_idx,
+                )
+    if aggregated_scores:
+        await engine._board.update_meta(
+            "phase_critic_scores", aggregated_scores,
+        )
+        logger.info(
+            "[Factory] Aggregated lane critic scores: %s",
+            aggregated_scores,
+        )
+
     # Inject lane context into the board's meta so the synthesizer can access it
     await engine._board.update_meta("phase", ResearchPhase.SYNTHESIZE.value)
     await engine._board.update_meta("lane_context", lane_context[:50000])
@@ -331,6 +368,31 @@ async def _run_synthesis(
 # -----------------------------------------------------------------------
 
 
+def _extract_lane_overrides(
+    config_json: dict | None, num_lanes: int
+) -> tuple[list[dict[str, str] | None], str | None]:
+    """Extract per-lane model overrides and embedding_model from config_json.
+
+    Returns a tuple of:
+    - list of length num_lanes, where each element is either
+      a dict of {role: model} overrides or None (use global settings).
+    - embedding_model string or None (use global settings).
+    """
+    if not config_json:
+        return [None] * num_lanes, None
+    embedding_model = config_json.get("embedding_model")
+    lane_overrides_list = config_json.get("lane_overrides", [])
+    if not isinstance(lane_overrides_list, list):
+        return [None] * num_lanes, embedding_model
+    result: list[dict[str, str] | None] = []
+    for i in range(num_lanes):
+        if i < len(lane_overrides_list) and lane_overrides_list[i]:
+            result.append(lane_overrides_list[i])
+        else:
+            result.append(None)
+    return result, embedding_model
+
+
 async def start_engine(project_id: str) -> None:
     if project_id in _running_engines:
         logger.warning("Engine already running for project %s", project_id)
@@ -338,7 +400,8 @@ async def start_engine(project_id: str) -> None:
 
     _stopped_projects.discard(project_id)
 
-    research_topic, concurrency = await _fetch_project_info(project_id)
+    research_topic, concurrency, config_json = await _fetch_project_info(project_id)
+    lane_overrides, embedding_model = _extract_lane_overrides(config_json, max(concurrency, 1))
     logger.info(
         "Engine starting for project %s (concurrency=%d)...",
         project_id,
@@ -355,6 +418,8 @@ async def start_engine(project_id: str) -> None:
                         engine = await _create_engine(
                             project_id,
                             research_topic=research_topic,
+                            model_overrides=lane_overrides[0],
+                            embedding_model=embedding_model,
                         )
                         _running_engines[project_id] = engine
                         logger.info("Engine run() starting for project %s", project_id)
@@ -365,6 +430,8 @@ async def start_engine(project_id: str) -> None:
                             project_id,
                             concurrency,
                             research_topic,
+                            lane_overrides,
+                            embedding_model=embedding_model,
                         )
 
                     logger.info("Engine run() completed for project %s", project_id)
@@ -399,10 +466,15 @@ async def _run_multi_lane(
     project_id: str,
     num_lanes: int,
     research_topic: str,
+    lane_overrides: list[dict[str, str] | None] | None = None,
+    embedding_model: str | None = None,
 ) -> None:
     """Run N independent lane engines concurrently, then synthesize results."""
     project_path = settings.project_path(project_id)
     broadcast = _build_ws_broadcast(project_id)
+
+    if lane_overrides is None:
+        lane_overrides = [None] * num_lanes
 
     # Create lane workspaces and engines
     lane_engines: list[OrchestrationEngine] = []
@@ -416,6 +488,8 @@ async def _run_multi_lane(
             workspace_path=lane_path,
             research_topic=research_topic,
             lane_index=lane_idx,
+            model_overrides=lane_overrides[lane_idx] if lane_idx < len(lane_overrides) else None,
+            embedding_model=embedding_model,
         )
         lane_engines.append(engine)
         # Track the first lane engine as the "main" for is_running() checks
@@ -434,15 +508,59 @@ async def _run_multi_lane(
 
     # Run all lanes concurrently -- COMPOSE is the final phase per lane
     # (SYNTHESIZE is skipped for individual lanes; it runs after all complete)
+    lane_stagger_secs = 5  # delay between lane starts to avoid API rate limiting
+    lane_max_retries = 2  # max retry attempts per lane on failure
+
     async def _run_lane(idx: int, eng: OrchestrationEngine) -> None:
-        try:
-            logger.info("[Factory] Lane %d starting for project %s", idx, project_id)
-            await eng.run()
-            logger.info("[Factory] Lane %d completed for project %s", idx, project_id)
-            await broadcast("LaneCompleted", {"lane": idx})
-        except Exception:
-            logger.exception("[Factory] Lane %d failed for project %s", idx, project_id)
-            await broadcast("LaneCompleted", {"lane": idx, "error": True})
+        # Stagger lane starts to avoid concurrent API rate limiting
+        if idx > 0:
+            delay = idx * lane_stagger_secs
+            logger.info("[Factory] Lane %d staggered by %ds", idx, delay)
+            await asyncio.sleep(delay)
+
+        for attempt in range(1, lane_max_retries + 2):
+            try:
+                logger.info(
+                    "[Factory] Lane %d starting for project %s (attempt %d)",
+                    idx, project_id, attempt,
+                )
+                await eng.run()
+                logger.info("[Factory] Lane %d completed for project %s", idx, project_id)
+                await broadcast("LaneCompleted", {"lane": idx})
+                return
+            except asyncio.CancelledError:
+                logger.info("[Factory] Lane %d cancelled for project %s", idx, project_id)
+                await broadcast("LaneCompleted", {"lane": idx, "error": True})
+                return
+            except Exception:
+                logger.exception(
+                    "[Factory] Lane %d failed for project %s (attempt %d/%d)",
+                    idx, project_id, attempt, lane_max_retries + 1,
+                )
+                if attempt <= lane_max_retries:
+                    backoff = 10 * attempt
+                    logger.info("[Factory] Lane %d retrying in %ds...", idx, backoff)
+                    await asyncio.sleep(backoff)
+                    # Re-create the engine for a clean retry
+                    lane_path = project_path / "lanes" / str(idx)
+                    try:
+                        eng = await _create_engine(
+                            project_id,
+                            workspace_path=lane_path,
+                            research_topic=research_topic,
+                            lane_index=idx,
+                            model_overrides=(
+                                lane_overrides[idx]
+                                if lane_overrides and idx < len(lane_overrides)
+                                else None
+                            ),
+                            embedding_model=embedding_model,
+                        )
+                    except Exception:
+                        logger.exception("[Factory] Lane %d engine re-creation failed", idx)
+                        break
+                else:
+                    await broadcast("LaneCompleted", {"lane": idx, "error": True})
 
     await asyncio.gather(*[_run_lane(idx, eng) for idx, eng in enumerate(lane_engines)])
 

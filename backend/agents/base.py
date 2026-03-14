@@ -86,14 +86,8 @@ class BaseAgent(ABC):
     # ------------------------------------------------------------------
 
     def _resolve_model(self) -> str:
-        """Return the model to use, respecting user overrides via settings."""
-        from backend.config import settings
-
-        overrides = settings.agent_model_overrides
-        role_key = self.role.value
-        if overrides and role_key in overrides and overrides[role_key]:
-            return overrides[role_key]
-        return self.preferred_model
+        """Return the model to use, respecting per-lane → global → default priority."""
+        return self._llm_router.resolve_model(self.role)
 
     async def execute(self, context: str, task: AgentTask) -> AgentResponse:
         prompt = self._build_prompt(context, task)

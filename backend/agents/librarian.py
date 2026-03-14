@@ -45,6 +45,17 @@ class LibrarianAgent(BaseAgent):
     # Timestamp when S2 last returned 429; skip S2 until cooldown expires
     _s2_cooldown_until: float = 0.0
 
+    def __init__(
+        self,
+        llm_router,
+        write_back_guard,
+        research_topic: str = "",
+        project_id: str = "",
+        embedding_model: str | None = None,
+    ) -> None:
+        super().__init__(llm_router, write_back_guard, research_topic=research_topic, project_id=project_id)
+        self._embedding_model = embedding_model
+
     async def execute(self, context: str, task: AgentTask) -> AgentResponse:
         enriched = await self._enrich_context_with_literature(context, task)
         return await super().execute(enriched, task)
@@ -93,7 +104,7 @@ class LibrarianAgent(BaseAgent):
         if not papers:
             return context
 
-        lines = ["\n## Real Literature (arXiv / Semantic Scholar)\n"]
+        lines = ["\n## Real Literature (HuggingFace / arXiv / Semantic Scholar)\n"]
         for p in papers:
             authors = p.get("authors", [])
             author_str = ", ".join(authors[:3])
@@ -145,7 +156,7 @@ class LibrarianAgent(BaseAgent):
 
                     collection_name = f"aide_{pid.replace('-', '_')}"
                     vector_store = VectorStore(collection_name=collection_name)
-                    embedding_service = EmbeddingService()
+                    embedding_service = EmbeddingService(model=self._embedding_model)
                     try:
                         engine = HybridSearchEngine(
                             vector_store,
@@ -240,7 +251,19 @@ class LibrarianAgent(BaseAgent):
                 remaining,
             )
 
-        # 2) arXiv with English query (fast, no rate limit issues)
+        # 2) HuggingFace Papers (good for trending AI/ML papers)
+        try:
+            papers = await retriever.search_huggingface(en_query, limit=5)
+            if papers:
+                logger.info(
+                    "[Librarian] HuggingFace returned %d papers",
+                    len(papers),
+                )
+                return papers
+        except Exception as exc:
+            logger.warning("[Librarian] HuggingFace search failed: %s", exc)
+
+        # 3) arXiv with English query (fast, no rate limit issues)
         try:
             papers = await retriever.search_arxiv(en_query, limit=5)
             if papers:
@@ -252,7 +275,7 @@ class LibrarianAgent(BaseAgent):
         except Exception as exc:
             logger.warning("[Librarian] arXiv search failed: %s", exc)
 
-        # 3) Semantic Scholar with English query (final fallback, skip if cooldown)
+        # 4) Semantic Scholar with English query (final fallback, skip if cooldown)
         if s2_available and en_query != original_query:
             try:
                 papers = await retriever.search_semantic_scholar(
@@ -293,7 +316,9 @@ class LibrarianAgent(BaseAgent):
                 doi = p.get("doi", "")
                 source = p.get("source", "web")
                 url = ""
-                if arxiv_id:
+                if source == "huggingface" and arxiv_id:
+                    url = f"https://huggingface.co/papers/{arxiv_id}"
+                elif arxiv_id:
                     url = f"https://arxiv.org/abs/{arxiv_id}"
                 elif doi:
                     url = f"https://doi.org/{doi}"
@@ -367,13 +392,13 @@ class LibrarianAgent(BaseAgent):
         try:
             from backend.config import settings as _cfg
 
-            if not _cfg.openai_api_key:
+            if not _cfg.openrouter_api_key:
                 return
 
             from backend.knowledge.embeddings import EmbeddingService
             from backend.knowledge.vector_store import VectorStore
 
-            embedding_svc = EmbeddingService(api_key=_cfg.openai_api_key)
+            embedding_svc = EmbeddingService(model=self._embedding_model)
             vector_store = VectorStore(
                 collection_name=f"project_{self._project_id}",
             )

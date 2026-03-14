@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 SEMANTIC_SCHOLAR_BASE = "https://api.semanticscholar.org/graph/v1"
 ARXIV_API_BASE = "https://export.arxiv.org/api/query"
+HUGGINGFACE_PAPERS_API = "https://huggingface.co/api/papers"
 REQUEST_DELAY = 1.5
 _MAX_RETRIES = 3
 _RATE_LIMIT_BACKOFF = 15.0
@@ -70,10 +71,12 @@ class WebRetriever:
             timeout=30.0,
         )
         self._arxiv_client = httpx.AsyncClient(timeout=30.0)
+        self._hf_client = httpx.AsyncClient(timeout=30.0)
 
     async def close(self) -> None:
         await self._s2_client.aclose()
         await self._arxiv_client.aclose()
+        await self._hf_client.aclose()
 
     async def search_semantic_scholar(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         logger.info("[WebRetriever] S2 query: %r", query[:80])
@@ -155,6 +158,60 @@ class WebRetriever:
                 if attempt < _MAX_RETRIES:
                     await asyncio.sleep(REQUEST_DELAY * (attempt + 1))
         return []
+
+
+    async def search_huggingface(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Search HuggingFace Papers API for trending/relevant papers."""
+        en_query = _extract_english_keywords(query)
+        logger.info("[WebRetriever] HuggingFace query: %r (original: %r)", en_query, query[:60])
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                resp = await self._hf_client.get(
+                    HUGGINGFACE_PAPERS_API,
+                    params={"query": en_query, "limit": limit},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                await asyncio.sleep(REQUEST_DELAY)
+                results = [_normalize_hf(p) for p in data if isinstance(p, dict)]
+                logger.info("[WebRetriever] HuggingFace returned %d papers", len(results))
+                return results
+            except Exception as exc:
+                logger.warning(
+                    "[WebRetriever] HuggingFace attempt %d/%d failed: %s",
+                    attempt + 1,
+                    _MAX_RETRIES + 1,
+                    exc,
+                )
+                if attempt < _MAX_RETRIES:
+                    await asyncio.sleep(REQUEST_DELAY * (attempt + 1))
+        return []
+
+
+def _normalize_hf(paper: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a HuggingFace Papers API response entry."""
+    authors = [a.get("name", "") for a in paper.get("authors", [])]
+    paper_id = paper.get("id", "")
+    title = paper.get("title", "")
+    summary = paper.get("summary", "")
+    year = None
+    published = paper.get("publishedAt", "")
+    if published and len(published) >= 4:
+        try:
+            year = int(published[:4])
+        except ValueError:
+            pass
+    return {
+        "paper_id": f"hf_{paper_id}",
+        "title": title,
+        "abstract": summary,
+        "authors": authors,
+        "year": year,
+        "citation_count": paper.get("upvotes", 0),
+        "doi": "",
+        "arxiv_id": paper_id,  # HF papers are arXiv papers
+        "source": "huggingface",
+    }
 
 
 def _normalize_s2(paper: dict[str, Any]) -> dict[str, Any]:

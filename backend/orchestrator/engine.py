@@ -116,6 +116,7 @@ class OrchestrationEngine:
         on_phase_change: PhaseChangeCallback | None = None,
         trend_extractor: TrendExtractor | None = None,
         token_tracker: TokenTracker | None = None,
+        lane_index: int | None = None,
     ) -> None:
         self._project_id = project_id
         self._board = board
@@ -125,17 +126,24 @@ class OrchestrationEngine:
         self._backtrack = backtrack
         self._checkpoint_mgr = checkpoint_mgr
         self._heartbeat = heartbeat
-        self._ws_broadcast = ws_broadcast
+        self._raw_ws_broadcast = ws_broadcast
         self._on_phase_change = on_phase_change
         self._subagent_pool: SubAgentPool | None = None
         self._trend_extractor = trend_extractor
         self._token_tracker = token_tracker
+        self._lane_index = lane_index
 
         self._running = False
         self._phase = ResearchPhase.EXPLORE
         self._iteration = 0
         self._research_topic = ""
         self._skip_synthesize = True  # single-lane: COMPOSE→COMPLETE directly
+
+    async def _ws_broadcast(self, event: str, payload: dict[str, Any]) -> None:
+        """Broadcast a WS event, automatically injecting lane_index if set."""
+        if self._lane_index is not None:
+            payload = {**payload, "lane_index": self._lane_index}
+        await self._raw_ws_broadcast(event, payload)
 
     def set_subagent_pool(self, pool: SubAgentPool) -> None:
         self._subagent_pool = pool

@@ -5,7 +5,7 @@ import shutil
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -112,12 +112,19 @@ async def delete_project(
 
 
 @router.get("/{project_id}/blackboard")
-async def get_blackboard(project_id: uuid.UUID) -> dict:
+async def get_blackboard(
+    project_id: uuid.UUID,
+    lane: int | None = Query(default=None, description="Lane index for multi-lane projects"),
+) -> dict:
     """返回项目当前黑板快照（来自文件系统），用于前端页面刷新后恢复状态。"""
     project_path = settings.project_path(str(project_id))
-    artifacts_dir = project_path / "artifacts"
-    challenges_dir = project_path / "challenges"
-    messages_dir = project_path / "messages"
+    if lane is not None:
+        base_path = project_path / "lanes" / str(lane)
+    else:
+        base_path = project_path
+    artifacts_dir = base_path / "artifacts"
+    challenges_dir = base_path / "challenges"
+    messages_dir = base_path / "messages"
 
     # 读取各类型 artifacts
     artifacts: dict[str, list] = {}
@@ -199,6 +206,37 @@ async def get_blackboard(project_id: uuid.UUID) -> dict:
                 continue
 
     return {"artifacts": artifacts, "challenges": challenges, "messages": messages}
+
+
+@router.get("/{project_id}/lanes")
+async def get_lane_statuses(project_id: uuid.UUID) -> list[dict]:
+    """Return per-lane phase/iteration status for multi-lane projects."""
+    project_path = settings.project_path(str(project_id))
+    lanes_dir = project_path / "lanes"
+    if not lanes_dir.exists():
+        return []
+
+    result: list[dict] = []
+    for lane_dir in sorted(lanes_dir.iterdir()):
+        if not lane_dir.is_dir() or not lane_dir.name.isdigit():
+            continue
+        meta_path = lane_dir / "meta.json"
+        phase = "explore"
+        iteration = 0
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+                phase = meta.get("phase", "explore")
+                phase_iters = meta.get("phase_iterations", {})
+                iteration = phase_iters.get(phase, meta.get("iteration", 0))
+            except Exception:
+                pass
+        result.append({
+            "lane": int(lane_dir.name),
+            "phase": phase,
+            "iteration": iteration,
+        })
+    return result
 
 
 @router.post("/{project_id}/start", response_model=ProjectOut)

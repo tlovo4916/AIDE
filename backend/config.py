@@ -34,11 +34,14 @@ class Settings(BaseSettings):
     # -- LLM defaults --
     default_model: str = "deepseek-reasoner"
     orchestrator_model: str = "deepseek-chat"
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "qwen/qwen3-embedding-8b"
     summarizer_model: str = "deepseek-chat"
 
     # -- Per-agent model overrides (role -> model string) --
     agent_model_overrides: dict[str, str] = Field(default_factory=dict)
+
+    # -- Custom presets (name -> {overrides: {role -> model}, description?: str}) --
+    custom_presets: dict[str, dict] = Field(default_factory=dict)
 
     # -- ChromaDB --
     chroma_persist_dir: Path = Path("workspace/.chroma")
@@ -68,7 +71,7 @@ class Settings(BaseSettings):
     convergence_min_critic_score: float = 6.0
     convergence_stable_rounds: int = 3
     heartbeat_interval_seconds: int = 60
-    heartbeat_stale_threshold_seconds: int = 360
+    heartbeat_stale_threshold_seconds: int = 600
 
     # -- Checkpoint --
     checkpoint_timeout_minutes: int = 30

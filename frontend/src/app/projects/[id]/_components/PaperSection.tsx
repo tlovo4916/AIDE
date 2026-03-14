@@ -158,7 +158,7 @@ export function PaperSection({
             PDF
           </Button>
           <a
-            href={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/projects/${projectId}/export/paper/download`}
+            href={`${typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:30001` : "http://localhost:30001"}/api/projects/${projectId}/export/paper/download`}
             download
           >
             <Button variant="primary" size="sm">
