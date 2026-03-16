@@ -223,12 +223,32 @@ class ActionExecutor:
         if not argument:
             logger.warning("Rejecting empty challenge from %s", action.agent_role.value)
             return
+
+        # Determine target agent: explicit from content, or infer from artifact creator
+        target_agent: AgentRole | None = None
+        raw_target = c.get("target_agent")
+        if raw_target:
+            try:
+                target_agent = AgentRole(raw_target)
+            except ValueError:
+                logger.warning("Invalid target_agent %r in challenge", raw_target)
+        if target_agent is None:
+            # Try to infer from the target artifact's created_by
+            target_artifact = c.get("target_artifact", action.target)
+            if target_artifact:
+                for at in ArtifactType:
+                    meta = await board.read_artifact_meta(at, target_artifact)
+                    if meta is not None:
+                        target_agent = meta.created_by
+                        break
+
         rec = ChallengeRecord(
             challenge_id=c.get("challenge_id", str(uuid.uuid4())),
             challenger=action.agent_role,
             target_artifact=c.get("target_artifact", action.target),
             argument=argument,
             evidence_refs=c.get("evidence_refs", []),
+            target_agent=target_agent,
         )
         await board.write_challenge(rec)
 

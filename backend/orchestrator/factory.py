@@ -8,6 +8,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import aiofiles
+
 from backend.agents.critic import CriticAgent
 from backend.agents.director import DirectorAgent
 from backend.agents.librarian import LibrarianAgent
@@ -39,6 +41,14 @@ _running_engines: dict[str, OrchestrationEngine] = {}
 _running_tasks: dict[str, asyncio.Task[None]] = {}
 _checkpoint_managers: dict[str, CheckpointManager] = {}
 _stopped_projects: set[str] = set()  # explicitly stopped by user, no auto-restart
+
+_LANE_PERSPECTIVES: list[str] = [
+    "Focus on theoretical foundations and formal analysis",
+    "Focus on practical applications and empirical results",
+    "Focus on limitations, criticisms, and alternative approaches",
+    "Focus on interdisciplinary connections and emerging trends",
+    "Focus on methodological innovations and reproducibility",
+]
 
 
 class _CheckpointBridge:
@@ -97,6 +107,7 @@ async def _create_engine(
     workspace_path: Path | None = None,
     research_topic: str = "",
     lane_index: int | None = None,
+    lane_perspective: str = "",
     model_overrides: dict[str, str] | None = None,
     embedding_model: str | None = None,
 ) -> OrchestrationEngine:
@@ -180,7 +191,9 @@ async def _create_engine(
         ),
     }
 
-    planner = OrchestratorPlanner(llm_router, research_topic=research_topic)
+    planner = OrchestratorPlanner(
+        llm_router, research_topic=research_topic, lane_perspective=lane_perspective,
+    )
     convergence = ConvergenceDetector()
     backtrack = BacktrackController()
 
@@ -194,6 +207,15 @@ async def _create_engine(
     checkpoint_bridge = _CheckpointBridge(checkpoint_mgr)
     heartbeat = HeartbeatMonitor()
     trend_extractor = TrendExtractor(llm_router)
+
+    # Embedding service for semantic topic drift detection
+    embedding_service = None
+    if settings.openrouter_api_key:
+        try:
+            from backend.knowledge.embeddings import EmbeddingService
+            embedding_service = EmbeddingService(model=embedding_model)
+        except Exception:
+            logger.warning("[Factory] Failed to create EmbeddingService for drift detection")
 
     async def _on_phase_change(new_phase: str) -> None:
         try:
@@ -219,6 +241,7 @@ async def _create_engine(
         trend_extractor=trend_extractor,
         token_tracker=token_tracker,
         lane_index=lane_index,
+        embedding_service=embedding_service,
     )
 
     subagent_pool = SubAgentPool(llm_router)
@@ -245,7 +268,14 @@ async def _update_project_status(project_id: str, status: str) -> None:
 
 
 async def _collect_lane_artifacts(project_path: Path, num_lanes: int) -> str:
-    """Read artifacts from all lane workspaces and build a combined context string."""
+    """Read artifacts from all lane workspaces and build a combined context string.
+
+    Uses async I/O (aiofiles) to avoid blocking the event loop when reading
+    many artifact files across multiple lanes.  Artifacts are grouped by type
+    within each lane for structured synthesis context.
+    """
+    max_content_chars = 6000  # per artifact (doubled from 3000)
+
     sections: list[str] = []
     for lane_idx in range(num_lanes):
         lane_path = project_path / "lanes" / str(lane_idx)
@@ -253,10 +283,12 @@ async def _collect_lane_artifacts(project_path: Path, num_lanes: int) -> str:
         if not artifacts_dir.exists():
             continue
 
-        lane_parts: list[str] = [f"\n## Lane {lane_idx}\n"]
+        # Group artifacts by type for structured output
+        type_groups: dict[str, list[str]] = {}
         for art_type_dir in sorted(artifacts_dir.iterdir()):
             if not art_type_dir.is_dir():
                 continue
+            group_name = art_type_dir.name
             for artifact_dir in sorted(art_type_dir.iterdir()):
                 if not artifact_dir.is_dir():
                     continue
@@ -264,7 +296,8 @@ async def _collect_lane_artifacts(project_path: Path, num_lanes: int) -> str:
                 if not meta_path.exists():
                     continue
                 try:
-                    meta = json.loads(meta_path.read_text())
+                    async with aiofiles.open(meta_path) as f:
+                        meta = json.loads(await f.read())
                     if meta.get("superseded"):
                         continue
                     # Find latest version
@@ -280,14 +313,21 @@ async def _collect_lane_artifacts(project_path: Path, num_lanes: int) -> str:
                         continue
                     l2_file = versions[-1] / "l2.json"
                     if l2_file.exists():
-                        content = l2_file.read_text()[:3000]
-                        art_type = meta.get("artifact_type", art_type_dir.name)
-                        lane_parts.append(
-                            f"### {art_type} ({meta.get('artifact_id', '')})\n{content}\n"
+                        async with aiofiles.open(l2_file) as f:
+                            content = (await f.read())[:max_content_chars]
+                        art_type = meta.get("artifact_type", group_name)
+                        aid = meta.get("artifact_id", "")
+                        type_groups.setdefault(art_type, []).append(
+                            f"#### {aid}\n{content}"
                         )
                 except Exception:
                     continue
-        if len(lane_parts) > 1:  # has content beyond the header
+
+        if type_groups:
+            lane_parts = [f"\n## Lane {lane_idx}\n"]
+            for art_type, items in sorted(type_groups.items()):
+                lane_parts.append(f"### {art_type} ({len(items)} artifacts)")
+                lane_parts.extend(items)
             sections.append("\n".join(lane_parts))
 
     return "\n".join(sections) if sections else ""
@@ -483,11 +523,13 @@ async def _run_multi_lane(
         lane_path.mkdir(parents=True, exist_ok=True)
         (lane_path / "artifacts").mkdir(exist_ok=True)
 
+        perspective = _LANE_PERSPECTIVES[lane_idx % len(_LANE_PERSPECTIVES)]
         engine = await _create_engine(
             project_id,
             workspace_path=lane_path,
             research_topic=research_topic,
             lane_index=lane_idx,
+            lane_perspective=perspective,
             model_overrides=lane_overrides[lane_idx] if lane_idx < len(lane_overrides) else None,
             embedding_model=embedding_model,
         )
@@ -549,6 +591,9 @@ async def _run_multi_lane(
                             workspace_path=lane_path,
                             research_topic=research_topic,
                             lane_index=idx,
+                            lane_perspective=_LANE_PERSPECTIVES[
+                                idx % len(_LANE_PERSPECTIVES)
+                            ],
                             model_overrides=(
                                 lane_overrides[idx]
                                 if lane_overrides and idx < len(lane_overrides)
@@ -569,11 +614,16 @@ async def _run_multi_lane(
         await _run_synthesis(project_id, project_path, num_lanes, research_topic)
 
 
-def stop_engine(project_id: str) -> None:
+def stop_engine(project_id: str, cancel: bool = False) -> None:
     _stopped_projects.add(project_id)
     engine = _running_engines.get(project_id)
     if engine:
         engine.stop()
+    if cancel:
+        task = _running_tasks.get(project_id)
+        if task and not task.done():
+            task.cancel()
+            logger.info("Cancelled asyncio task for project %s", project_id)
 
 
 def get_engine(project_id: str) -> OrchestrationEngine | None:

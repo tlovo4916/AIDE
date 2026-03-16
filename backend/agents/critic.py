@@ -15,6 +15,9 @@ class CriticAgent(BaseAgent):
         ArtifactType.DIRECTIONS,
         ArtifactType.HYPOTHESES,
         ArtifactType.EVIDENCE_FINDINGS,
+        ArtifactType.EVIDENCE_GAPS,
+        ArtifactType.EXPERIMENT_GUIDE,
+        ArtifactType.TREND_SIGNALS,
         ArtifactType.OUTLINE,
         ArtifactType.DRAFT,
     ]

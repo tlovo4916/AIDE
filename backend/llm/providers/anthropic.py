@@ -57,6 +57,16 @@ class AnthropicProvider:
             else:
                 api_messages.append({"role": msg["role"], "content": msg["content"]})
 
+        # Handle response_format (not natively supported by Anthropic API —
+        # enforce JSON via system prompt injection instead)
+        response_format = kwargs.pop("response_format", None)
+        if response_format and response_format.get("type") == "json_object":
+            json_instruction = (
+                "You must respond with valid JSON only. "
+                "No markdown fences, no prose, no explanations."
+            )
+            system_prompt = f"{json_instruction}\n\n{system_prompt}" if system_prompt else json_instruction
+
         # Ensure at least one user message
         if not api_messages:
             api_messages.append({"role": "user", "content": ""})

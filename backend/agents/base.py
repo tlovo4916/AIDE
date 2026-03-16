@@ -36,6 +36,7 @@ class LLMRouter(Protocol):
         system_prompt: str | None = None,
         project_id: str | None = None,
         agent_role: AgentRole | None = None,
+        json_mode: bool = False,
     ) -> str: ...
 
 
@@ -93,32 +94,52 @@ class BaseAgent(ABC):
         prompt = self._build_prompt(context, task)
         model = self._resolve_model()
 
-        # Claude models need stronger JSON enforcement — they tend to
-        # produce natural-language prose instead of structured JSON.
-        if model.startswith("claude-"):
-            prompt += (
-                "\n\n---\n"
-                "CRITICAL INSTRUCTION: You MUST respond with a single valid JSON "
-                "object matching the schema above. Do NOT write prose, markdown, "
-                "or explanations outside the JSON. Start your response with `{` "
-                "and end with `}`. Keep action content concise to stay within "
-                "the token limit."
-            )
-
         raw = await self._llm_router.generate(
             model,
             prompt,
             project_id=self._project_id or None,
             agent_role=self.role,
+            json_mode=True,
         )
 
         response = self._parse_response(raw)
 
+        # Retry once if the response was non-JSON (fallback summary)
+        if not response.actions and response.reasoning_summary == raw[:500]:
+            logger.warning(
+                "Agent %s: non-JSON response, retrying once",
+                self.role.value,
+            )
+            retry_prompt = (
+                f"{prompt}\n\n"
+                "[RETRY] Your previous output was not valid JSON. "
+                "You MUST output ONLY a JSON object matching the schema above. "
+                "No markdown fences, no explanatory text."
+            )
+            raw = await self._llm_router.generate(
+                model,
+                retry_prompt,
+                project_id=self._project_id or None,
+                agent_role=self.role,
+                json_mode=True,
+            )
+            response = self._parse_response(raw)
+
         for action in response.actions:
             action.agent_role = self.role
 
-        extra_actions = await self._write_back_guard.check(raw, response.actions)
-        response.actions.extend(extra_actions)
+        from backend.config import settings as cfg
+
+        if cfg.enable_write_back_guard:
+            extra_actions = await self._write_back_guard.check(raw, response.actions)
+            if extra_actions:
+                logger.info(
+                    "Agent %s: write-back guard produced %d extra actions",
+                    self.role.value, len(extra_actions),
+                )
+            response.actions.extend(extra_actions)
+        else:
+            logger.debug("Agent %s: write-back guard disabled, skipping", self.role.value)
 
         if not self.can_spawn_subagents:
             response.subagent_requests = []

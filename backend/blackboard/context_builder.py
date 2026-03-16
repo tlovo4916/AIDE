@@ -13,7 +13,7 @@ from typing import Protocol
 import tiktoken
 
 from backend.config import settings
-from backend.types import ContextLevel
+from backend.types import ArtifactType, ContextLevel
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +25,17 @@ def _count_tokens(text: str) -> int:
 
 
 class _BoardContextProtocol(Protocol):
-    async def get_state_summary(self, level: ContextLevel) -> str: ...
+    async def get_state_summary(
+        self,
+        level: ContextLevel,
+        relevant_types: set[ArtifactType] | None = None,
+    ) -> str: ...
 
 
 async def build_budget_context(
     board: _BoardContextProtocol,
     budget: int | None = None,
+    relevant_types: set[ArtifactType] | None = None,
 ) -> str:
     """Build a context string that fits within *budget* tokens.
 
@@ -43,7 +48,7 @@ async def build_budget_context(
     budget = budget or settings.context_budget_tokens
 
     for level in (ContextLevel.L2, ContextLevel.L1, ContextLevel.L0):
-        summary = await board.get_state_summary(level)
+        summary = await board.get_state_summary(level, relevant_types=relevant_types)
         token_count = _count_tokens(summary)
         if token_count <= budget:
             if level != ContextLevel.L2:
@@ -61,7 +66,7 @@ async def build_budget_context(
         )
 
     # All levels exceed budget — hard truncate L0 (approx 4 chars/token)
-    summary = await board.get_state_summary(ContextLevel.L0)
+    summary = await board.get_state_summary(ContextLevel.L0, relevant_types=relevant_types)
     char_budget = budget * 4
     if len(summary) > char_budget:
         logger.warning(

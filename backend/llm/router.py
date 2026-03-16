@@ -101,17 +101,23 @@ class LLMRouter:
         system_prompt: str | None = None,
         project_id: str | None = None,
         agent_role: AgentRole | None = None,
+        json_mode: bool = False,
     ) -> str:
         messages: list[dict[str, str]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
+        kwargs: dict[str, Any] = {}
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+
         response = await self.call(
             messages=messages,
             model=model,
             project_id=project_id,
             agent_role=agent_role,
+            **kwargs,
         )
         return response.content
 

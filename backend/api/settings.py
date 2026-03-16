@@ -23,6 +23,12 @@ _OVERRIDES_FIELDS = [
     "enable_web_retrieval",
     "agent_model_overrides",
     "custom_presets",
+    "enable_llm_planner",
+    "enable_write_back_guard",
+    "topic_drift_embedding_threshold",
+    "topic_drift_keyword_threshold",
+    "max_iterations_per_phase",
+    "convergence_min_critic_score",
 ]
 
 
@@ -89,6 +95,12 @@ class LLMSettings(BaseModel):
         "synthesizer": "deepseek-reasoner",
     }
     custom_presets: dict[str, dict] = {}
+    enable_llm_planner: bool = True
+    enable_write_back_guard: bool = True
+    topic_drift_embedding_threshold: float = 0.5
+    topic_drift_keyword_threshold: float = 0.4
+    max_iterations_per_phase: int = 4
+    convergence_min_critic_score: float = 6.0
 
 
 def _mask(key: str | None) -> str | None:
@@ -112,6 +124,12 @@ async def get_settings() -> LLMSettings:
         semantic_scholar_api_key=_mask(settings.semantic_scholar_api_key),
         agent_model_overrides=settings.agent_model_overrides,
         custom_presets=settings.custom_presets,
+        enable_llm_planner=settings.enable_llm_planner,
+        enable_write_back_guard=settings.enable_write_back_guard,
+        topic_drift_embedding_threshold=settings.topic_drift_embedding_threshold,
+        topic_drift_keyword_threshold=settings.topic_drift_keyword_threshold,
+        max_iterations_per_phase=settings.max_iterations_per_phase,
+        convergence_min_critic_score=settings.convergence_min_critic_score,
     )
 
 
@@ -133,6 +151,12 @@ async def update_settings(body: LLMSettings) -> LLMSettings:
     settings.enable_web_retrieval = body.enable_web_retrieval
     settings.agent_model_overrides = body.agent_model_overrides
     settings.custom_presets = body.custom_presets
+    settings.enable_llm_planner = body.enable_llm_planner
+    settings.enable_write_back_guard = body.enable_write_back_guard
+    settings.topic_drift_embedding_threshold = body.topic_drift_embedding_threshold
+    settings.topic_drift_keyword_threshold = body.topic_drift_keyword_threshold
+    settings.max_iterations_per_phase = body.max_iterations_per_phase
+    settings.convergence_min_critic_score = body.convergence_min_critic_score
 
     _save_overrides()
     return await get_settings()

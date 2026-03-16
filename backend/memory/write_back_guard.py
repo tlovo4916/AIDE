@@ -1,21 +1,38 @@
-"""Write-back guard -- detects unpersisted insights in agent responses."""
+"""Write-back guard -- rule-based check for missing primary artifacts.
+
+Verifies that an agent produced at least one artifact of its expected
+primary types.  If none were found, generates a warning POST_MESSAGE
+action so the gap is visible on the blackboard.
+
+This replaces the previous LLM-based approach which had questionable ROI
+(extra LLM call per agent invocation, many results filtered by dedup).
+"""
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Awaitable, Callable
 
-from backend.types import ActionType, AgentRole, BlackboardAction
-from backend.utils.json_utils import safe_json_loads
+from backend.types import ActionType, AgentRole, ArtifactType, BlackboardAction
 
 logger = logging.getLogger(__name__)
 
 LLMCall = Callable[[list[dict[str, str]]], Awaitable[str]]
 
+# Agent role -> expected primary artifact types
+_ROLE_PRIMARY_TYPES: dict[AgentRole, set[str]] = {
+    AgentRole.DIRECTOR: {"directions"},
+    AgentRole.SCIENTIST: {"hypotheses", "evidence_gaps", "experiment_guide"},
+    AgentRole.LIBRARIAN: {"evidence_findings", "trend_signals"},
+    AgentRole.WRITER: {"outline", "draft"},
+    AgentRole.CRITIC: {"review"},
+    AgentRole.SYNTHESIZER: {"draft"},
+}
+
 
 class WriteBackGuard:
-    def __init__(self, llm_call: LLMCall) -> None:
+    def __init__(self, llm_call: LLMCall | None = None) -> None:
+        # llm_call kept for interface compatibility but no longer used
         self._llm_call = llm_call
 
     async def check(
@@ -23,67 +40,76 @@ class WriteBackGuard:
         agent_response: str,
         executed_actions: list[BlackboardAction],
     ) -> list[BlackboardAction]:
-        if not agent_response.strip():
+        """Check if the agent produced at least one primary artifact.
+
+        Returns a warning POST_MESSAGE if no write_artifact action was found
+        for any of the agent's expected primary types.
+        """
+        if not executed_actions:
             return []
 
-        # Truncate to avoid sending excessively long responses to LLM
-        truncated_response = agent_response[:3000]
+        agent_role = executed_actions[0].agent_role
+        expected = _ROLE_PRIMARY_TYPES.get(agent_role)
+        if not expected:
+            return []
 
-        executed_summary = json.dumps(
-            [{"type": a.action_type.value, "target": a.target} for a in executed_actions],
-            ensure_ascii=False,
-        )
+        # Collect artifact types actually written
+        written_types: set[str] = set()
+        for action in executed_actions:
+            if action.action_type == ActionType.WRITE_ARTIFACT:
+                at = action.content.get("artifact_type", action.target)
+                if isinstance(at, ArtifactType):
+                    at = at.value
+                written_types.add(at)
 
-        prompt = (
-            "Analyze the agent response below. Identify findings, conclusions, "
-            "or insights NOT already captured by the executed actions.\n\n"
-            f"Response:\n{truncated_response}\n\n"
-            f"Executed actions:\n{executed_summary}\n\n"
-            "Return a JSON array of objects with keys: "
-            '"content" (the unpersisted insight) and "refs" '
-            "(list of referenced artifact IDs). "
-            "Return [] if all insights are already captured. "
-            "Output raw JSON only. No markdown fences."
-        )
-
-        try:
-            result = await self._llm_call(
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You identify unpersisted reasoning in agent outputs. "
-                            "Respond with a valid JSON array only. "
-                            "No markdown fences, no explanation."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ]
+        if not written_types:
+            # Agent produced no artifacts at all — emit a warning
+            logger.info(
+                "[WriteBackGuard] %s produced no artifacts (expected: %s)",
+                agent_role.value,
+                expected,
             )
-
-            insights = safe_json_loads(result, fallback=[])
-            if not isinstance(insights, list) or not insights:
-                return []
-
-            agent_role = executed_actions[0].agent_role if executed_actions else AgentRole.DIRECTOR
-
-            additional: list[BlackboardAction] = []
-            for item in insights:
-                if not isinstance(item, dict) or not item.get("content"):
-                    continue
-                action = BlackboardAction(
+            return [
+                BlackboardAction(
                     agent_role=agent_role,
                     action_type=ActionType.POST_MESSAGE,
                     target="broadcast",
                     content={
-                        "text": item["content"],
-                        "refs": item.get("refs", []),
+                        "text": (
+                            f"[WRITE-BACK WARNING] {agent_role.value} completed "
+                            f"without producing any artifacts. "
+                            f"Expected types: {', '.join(sorted(expected))}"
+                        ),
                         "source": "write_back_guard",
                     },
                 )
-                additional.append(action)
+            ]
 
-            return additional
-        except Exception as exc:
-            logger.warning("WriteBackGuard LLM check failed: %s", exc)
-            return []
+        # Check if any expected type was produced
+        produced_expected = written_types & expected
+        if not produced_expected:
+            missing = expected - written_types
+            logger.info(
+                "[WriteBackGuard] %s wrote %s but expected %s",
+                agent_role.value,
+                written_types,
+                expected,
+            )
+            return [
+                BlackboardAction(
+                    agent_role=agent_role,
+                    action_type=ActionType.POST_MESSAGE,
+                    target="broadcast",
+                    content={
+                        "text": (
+                            f"[WRITE-BACK WARNING] {agent_role.value} wrote "
+                            f"{', '.join(sorted(written_types))} but did not "
+                            f"produce expected types: "
+                            f"{', '.join(sorted(missing))}"
+                        ),
+                        "source": "write_back_guard",
+                    },
+                )
+            ]
+
+        return []

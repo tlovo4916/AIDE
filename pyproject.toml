@@ -23,6 +23,7 @@ dependencies = [
     "aiofiles>=24.1",
     "tiktoken>=0.8",
     "websockets>=14.1",
+    "jieba>=0.42",
 ]
 
 [project.optional-dependencies]

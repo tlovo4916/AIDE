@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable, Coroutine
 from datetime import datetime
@@ -14,13 +15,14 @@ from backend.agents.subagent import SubAgentPool
 from backend.knowledge.trend_extractor import TrendExtractor
 from backend.llm.tracker import TokenTracker
 from backend.orchestrator.backtrack import BacktrackController
-from backend.orchestrator.convergence import ConvergenceDetector
+from backend.orchestrator.convergence import ConvergenceDetector, get_phase_required_artifacts
 from backend.orchestrator.heartbeat import HeartbeatMonitor
 from backend.orchestrator.planner import OrchestratorPlanner
 from backend.types import (
     ActionType,
     AgentRole,
     AgentTask,
+    ArtifactType,
     BlackboardAction,
     ChallengeRecord,
     CheckpointAction,
@@ -30,7 +32,7 @@ from backend.types import (
 )
 
 # Auto-dismiss challenges that have been open longer than this many phase iterations
-_CHALLENGE_AUTO_DISMISS_AFTER = 2
+_CHALLENGE_AUTO_DISMISS_AFTER = 5
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +43,14 @@ PhaseChangeCallback = Callable[[str], Coroutine[Any, Any, None]]  # receives new
 class Board(Protocol):
     """Minimal blackboard interface expected by the orchestration engine."""
 
-    async def get_state_summary(self, level: ContextLevel) -> str: ...
+    async def get_state_summary(
+        self,
+        level: ContextLevel,
+        relevant_types: set[ArtifactType] | None = None,
+    ) -> str: ...
+    async def list_artifacts(
+        self, artifact_type: ArtifactType, include_superseded: bool = False
+    ) -> list: ...
     async def apply_action(self, action: BlackboardAction) -> None: ...
     async def dedup_check(self, actions: list[BlackboardAction]) -> list[BlackboardAction]: ...
     async def get_open_challenges(self) -> list[ChallengeRecord]: ...
@@ -77,11 +86,13 @@ class CheckpointManager(Protocol):
 class _BoardContextBuilder:
     """Adapts the Board into the ContextBuilder protocol for SubAgentPool."""
 
-    def __init__(self, board: Board) -> None:
+    def __init__(self, board: Board, agents: dict[AgentRole, BaseAgent] | None = None) -> None:
         self._board = board
+        self._agents = agents
 
     async def build(self, role: AgentRole, task: str) -> str:
-        return await self._board.get_state_summary(ContextLevel.L1)
+        relevant = _get_relevant_types(role, self._agents) if self._agents else None
+        return await self._board.get_state_summary(ContextLevel.L1, relevant_types=relevant)
 
 
 class OrchestrationEngine:
@@ -117,6 +128,7 @@ class OrchestrationEngine:
         trend_extractor: TrendExtractor | None = None,
         token_tracker: TokenTracker | None = None,
         lane_index: int | None = None,
+        embedding_service: Any | None = None,
     ) -> None:
         self._project_id = project_id
         self._board = board
@@ -132,12 +144,15 @@ class OrchestrationEngine:
         self._trend_extractor = trend_extractor
         self._token_tracker = token_tracker
         self._lane_index = lane_index
+        self._embedding_service = embedding_service
 
         self._running = False
         self._phase = ResearchPhase.EXPLORE
         self._iteration = 0
         self._research_topic = ""
         self._skip_synthesize = True  # single-lane: COMPOSE→COMPLETE directly
+        self._topic_embedding: list[float] | None = None
+        self._topic_drift_detected = False  # set by _check_on_topic, read by _dispatch_agent
 
     async def _ws_broadcast(self, event: str, payload: dict[str, Any]) -> None:
         """Broadcast a WS event, automatically injecting lane_index if set."""
@@ -175,6 +190,22 @@ class OrchestrationEngine:
         )
         await self._heartbeat.start(self._project_id, self._board)
 
+        # Inject lessons learned from previous projects
+        await self._inject_lessons_learned()
+
+        # Pre-compute topic embedding for semantic drift detection
+        if self._embedding_service and self._research_topic and not self._topic_embedding:
+            try:
+                self._topic_embedding = await self._embedding_service.embed_text(
+                    self._research_topic
+                )
+                logger.info(
+                    "[Engine] Topic embedding computed (%d dims)",
+                    len(self._topic_embedding),
+                )
+            except Exception:
+                logger.warning("[Engine] Failed to compute topic embedding, using keyword fallback")
+
         try:
             while self._running and self._phase != ResearchPhase.COMPLETE:
                 self._iteration += 1
@@ -188,19 +219,34 @@ class OrchestrationEngine:
                     self._project_id,
                 )
 
-                # 1. Assess blackboard state
+                # 1. Assess blackboard state (planner gets full panoramic view)
                 logger.info("[Engine] Building state summary...")
-                summary = await self._build_state_summary(self._board)
+                summary = await self._build_state_summary(self._board, role=None)
                 logger.info("[Engine] State summary length: %d chars", len(summary))
 
                 # 1b. Per-iteration on-topic check (log warning if research seems to drift)
                 if self._research_topic and self._iteration > 1:
                     await self._check_on_topic(summary)
 
-                # 2. Plan next action
+                # 2. Plan next action (compute missing artifacts for coverage loop)
                 logger.info("[Engine] Calling planner...")
+                open_challenges = await self._board.get_open_challenges()
+                required = get_phase_required_artifacts(self._phase)
+                missing: list[ArtifactType] = []
+                for at in required:
+                    arts = await self._board.list_artifacts(at)
+                    if not arts:
+                        missing.append(at)
+                if missing:
+                    logger.info(
+                        "[Engine] Missing artifacts for %s: %s",
+                        self._phase.value,
+                        [at.value for at in missing],
+                    )
                 decision = await self._planner.plan_next_action(
-                    summary, self._phase, self._iteration
+                    summary, self._phase, self._iteration,
+                    open_challenges=open_challenges or None,
+                    missing_artifact_types=missing or None,
                 )
                 logger.info(
                     "[Engine] Planner decided: agent=%s, task=%s",
@@ -392,19 +438,49 @@ class OrchestrationEngine:
 
         self._heartbeat.record_agent_status(decision.agent_to_invoke.value, "executing")
 
+        # Inject topic drift warning so the agent can self-correct
+        task_desc = decision.task_description
+        if self._topic_drift_detected and self._research_topic:
+            task_desc += (
+                f"\n\n[⚠️ TOPIC DRIFT WARNING] Recent output appears to be "
+                f"drifting from the research topic: {self._research_topic[:200]}\n"
+                f"Please ensure your output stays focused on this topic."
+            )
+
+        # Inject pending challenges targeted at this agent into the task description
+        agent_challenges = [
+            ch for ch in await self._board.get_open_challenges()
+            if getattr(ch, "target_agent", None) == decision.agent_to_invoke
+        ]
+        if agent_challenges:
+            ch_lines = [
+                "\n\n[PENDING CHALLENGES — YOU MUST ADDRESS THESE]"
+            ]
+            for ch in agent_challenges[:3]:
+                ch_lines.append(
+                    f"Challenge from {ch.challenger.value}: {ch.argument[:300]}"
+                )
+            ch_lines.append(
+                "You MUST include RESOLVE_CHALLENGE actions in your response "
+                "to address these challenges."
+            )
+            task_desc += "\n".join(ch_lines)
+
         task = AgentTask(
             task_id=(f"{self._project_id}-{self._iteration}-{decision.agent_to_invoke.value}"),
-            description=decision.task_description,
+            description=task_desc,
             priority=decision.task_priority,
             allow_subagents=decision.allow_subagents,
         )
 
-        context = await self._build_state_summary(self._board)
+        context = await self._build_state_summary(
+            self._board, role=decision.agent_to_invoke,
+        )
         response = await agent.execute(context, task)
 
         if response.subagent_requests and self._subagent_pool:
             workspace = self._board.get_project_path()
-            ctx_builder = _BoardContextBuilder(self._board)
+            ctx_builder = _BoardContextBuilder(self._board, self._agents)
             sub_results = await self._subagent_pool.spawn(
                 agent.role,
                 response.subagent_requests,
@@ -419,6 +495,27 @@ class OrchestrationEngine:
                     logger.warning("SubAgent %s failed: %s", sr.subagent_id, sr.error)
 
         self._heartbeat.record_agent_status(decision.agent_to_invoke.value, "idle")
+
+        # Post-check: did the agent actually resolve its challenges?
+        if agent_challenges:
+            resolved_ids = {
+                a.target
+                for a in response.actions
+                if a.action_type == ActionType.RESOLVE_CHALLENGE
+            }
+            unresolved = [
+                ch for ch in agent_challenges if ch.challenge_id not in resolved_ids
+            ]
+            if unresolved:
+                logger.warning(
+                    "[Engine] %s had %d challenge(s) but resolved %d; "
+                    "%d still open: %s",
+                    decision.agent_to_invoke.value,
+                    len(agent_challenges),
+                    len(resolved_ids),
+                    len(unresolved),
+                    [ch.challenge_id for ch in unresolved],
+                )
 
         return response.actions
 
@@ -466,8 +563,99 @@ class OrchestrationEngine:
                 },
             )
             logger.info("[Engine] Research completed. Paper at %s", paper_path)
+
+            # Generate lessons learned for cross-project knowledge
+            await self._generate_lessons_learned()
         except Exception:
             logger.exception("[Engine] Error during research completion export")
+
+    async def _generate_lessons_learned(self) -> None:
+        """Generate and persist lessons learned from this research project."""
+        try:
+            from backend.config import settings as cfg
+
+            summary = await self._build_state_summary(self._board, role=None)
+            summary_truncated = summary[:3000]
+
+            prompt = (
+                "Based on this completed research project, extract lessons learned.\n"
+                f"Research topic: {self._research_topic}\n\n"
+                f"Project summary:\n{summary_truncated}\n\n"
+                "Output JSON with keys: strategies (list of effective strategies), "
+                "pitfalls (list of pitfalls to avoid), "
+                "insights (list of key insights for future research).\n"
+                "Output raw JSON only."
+            )
+
+            raw = await self._planner._llm_router.generate(
+                cfg.orchestrator_model, prompt, json_mode=True,
+            )
+            from backend.utils.json_utils import safe_json_loads
+
+            lessons = safe_json_loads(raw)
+            if not lessons:
+                logger.warning("[Engine] Lessons learned: LLM returned non-JSON")
+                return
+
+            lessons_dir = (
+                cfg.workspace_dir / "global_knowledge" / "lessons"
+            )
+            lessons_dir.mkdir(parents=True, exist_ok=True)
+            lessons_path = lessons_dir / f"{self._project_id}.json"
+            lessons_path.write_text(json.dumps(lessons, ensure_ascii=False, indent=2))
+            logger.info("[Engine] Lessons learned saved to %s", lessons_path)
+        except Exception:
+            logger.exception("[Engine] Failed to generate lessons learned (non-fatal)")
+
+    async def _inject_lessons_learned(self) -> None:
+        """Load lessons from previous projects and inject into board meta."""
+        try:
+            from backend.config import settings as cfg
+
+            lessons_dir = cfg.workspace_dir / "global_knowledge" / "lessons"
+            if not lessons_dir.exists():
+                return
+
+            all_lessons: list[dict] = []
+            for path in sorted(lessons_dir.glob("*.json"))[-5:]:
+                if path.stem == self._project_id:
+                    continue  # skip own project
+                try:
+                    data = json.loads(path.read_text())
+                    if isinstance(data, dict):
+                        all_lessons.append(data)
+                except Exception:
+                    continue
+
+            if not all_lessons:
+                return
+
+            # Merge into concise summary
+            strategies: list[str] = []
+            pitfalls: list[str] = []
+            for lesson in all_lessons:
+                for s in lesson.get("strategies", [])[:3]:
+                    if isinstance(s, str) and s not in strategies:
+                        strategies.append(s)
+                for p in lesson.get("pitfalls", [])[:3]:
+                    if isinstance(p, str) and p not in pitfalls:
+                        pitfalls.append(p)
+
+            if strategies or pitfalls:
+                summary = ""
+                if strategies:
+                    summary += "Effective strategies: " + "; ".join(strategies[:5])
+                if pitfalls:
+                    summary += "\nPitfalls to avoid: " + "; ".join(pitfalls[:5])
+                await self._board.update_meta(
+                    "lessons_learned", summary[:2000],
+                )
+                logger.info(
+                    "[Engine] Injected lessons from %d previous projects",
+                    len(all_lessons),
+                )
+        except Exception:
+            logger.debug("[Engine] Lessons injection failed (non-fatal)")
 
     # ------------------------------------------------------------------
     # Challenge handling
@@ -596,24 +784,74 @@ class OrchestrationEngine:
         return next_phase
 
     async def _check_on_topic(self, summary: str) -> None:
-        """Warn via WS if the state summary appears to be off the research topic."""
+        """Warn via WS if the state summary appears to be off the research topic.
+
+        Three-layer fallback:
+          1. Embedding cosine similarity (if embedding_service available)
+          2. jieba segmentation (for Chinese topics)
+          3. Whitespace keyword matching (final fallback)
+        """
+        from backend.config import settings as cfg
+
         if not self._research_topic:
             return
-        topic_words = set(self._research_topic.lower().split())
-        # Remove very short/common words
-        topic_words = {w for w in topic_words if len(w) > 2}
-        if not topic_words:
+
+        match_ratio: float | None = None
+        method = "unknown"
+        on_topic = True
+        threshold = 0.5
+
+        # Layer 1: Embedding similarity
+        if self._topic_embedding and self._embedding_service:
+            try:
+                summary_emb = await self._embedding_service.embed_text(summary[:2000])
+                sim = self._cosine_similarity(self._topic_embedding, summary_emb)
+                match_ratio = sim
+                method = "embedding"
+                threshold = cfg.topic_drift_embedding_threshold
+                on_topic = sim >= threshold
+            except Exception:
+                logger.debug("[Engine] Embedding drift check failed, trying jieba")
+
+        # Layer 2: jieba segmentation (better for Chinese)
+        if match_ratio is None:
+            try:
+                import jieba
+                topic_words = set(jieba.cut(self._research_topic))
+                topic_words = {w for w in topic_words if len(w) > 1}
+                if topic_words:
+                    summary_lower = summary[:5000].lower()
+                    matched = sum(1 for w in topic_words if w.lower() in summary_lower)
+                    match_ratio = matched / len(topic_words)
+                    method = "jieba"
+                    threshold = cfg.topic_drift_keyword_threshold
+                    on_topic = match_ratio >= threshold
+            except ImportError:
+                logger.debug("[Engine] jieba not available, using whitespace fallback")
+
+        # Layer 3: Whitespace keyword matching (final fallback)
+        if match_ratio is None:
+            topic_words_ws = set(self._research_topic.lower().split())
+            topic_words_ws = {w for w in topic_words_ws if len(w) > 2}
+            if not topic_words_ws:
+                return
+            summary_lower = summary.lower()
+            matched = sum(1 for w in topic_words_ws if w in summary_lower)
+            match_ratio = matched / len(topic_words_ws)
+            method = "keyword"
+            threshold = cfg.topic_drift_keyword_threshold
+            on_topic = match_ratio >= threshold
+
+        if match_ratio is None:
             return
-        summary_lower = summary.lower()
-        matched = sum(1 for w in topic_words if w in summary_lower)
-        match_ratio = matched / len(topic_words)
-        if match_ratio < 0.2:
+
+        if not on_topic:
+            self._topic_drift_detected = True
             logger.warning(
-                "[Engine] ON-TOPIC CHECK FAILED at iteration %d: "
-                "only %.0f%% of topic keywords found in state summary. "
+                "[Engine] ON-TOPIC CHECK FAILED (%s) at iteration %d: "
+                "score=%.2f (threshold=%.2f). "
                 "Research may have drifted from: %r",
-                self._iteration,
-                match_ratio * 100,
+                method, self._iteration, match_ratio, threshold,
                 self._research_topic[:80],
             )
             await self._ws_broadcast(
@@ -622,6 +860,7 @@ class OrchestrationEngine:
                     "iteration": self._iteration,
                     "research_topic": self._research_topic,
                     "match_ratio": round(match_ratio, 2),
+                    "method": method,
                     "message": (
                         f"Research may be drifting from the intended topic: "
                         f"{self._research_topic[:100]}"
@@ -629,10 +868,23 @@ class OrchestrationEngine:
                 },
             )
         else:
+            self._topic_drift_detected = False
             logger.debug(
-                "[Engine] On-topic check passed (%.0f%% keyword match)",
-                match_ratio * 100,
+                "[Engine] On-topic check passed (%s, score=%.2f)",
+                method, match_ratio,
             )
+
+    @staticmethod
+    def _cosine_similarity(a: list[float], b: list[float]) -> float:
+        """Compute cosine similarity between two vectors."""
+        import math
+
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)
 
     @staticmethod
     def _extract_critic_score(content: dict[str, Any]) -> float | None:
@@ -673,8 +925,26 @@ class OrchestrationEngine:
                 continue
         return None
 
-    @staticmethod
-    async def _build_state_summary(board: Board) -> str:
+    async def _build_state_summary(
+        self, board: Board, role: AgentRole | None = None,
+    ) -> str:
         from backend.blackboard.context_builder import build_budget_context
 
-        return await build_budget_context(board)
+        relevant = _get_relevant_types(role, self._agents) if role else None
+        return await build_budget_context(board, relevant_types=relevant)
+
+
+def _get_relevant_types(
+    role: AgentRole | None,
+    agents: dict[AgentRole, BaseAgent] | None,
+) -> set[ArtifactType] | None:
+    """Return the set of artifact types an agent role should see, or None for all."""
+    if role is None or agents is None:
+        return None
+    agent = agents.get(role)
+    if agent is None:
+        return None
+    types: set[ArtifactType] = set()
+    types.update(agent.primary_artifact_types)
+    types.update(agent.dependency_artifact_types)
+    return types if types else None

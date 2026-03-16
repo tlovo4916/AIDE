@@ -124,6 +124,7 @@ class ChallengeRecord(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
     response: str | None = None
     responder: AgentRole | None = None
+    target_agent: AgentRole | None = None  # Agent that should respond to this challenge
     created_at: datetime = Field(default_factory=datetime.utcnow)
     resolved_at: datetime | None = None
 

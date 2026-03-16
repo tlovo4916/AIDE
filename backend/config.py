@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     convergence_stable_rounds: int = 3
     heartbeat_interval_seconds: int = 60
     heartbeat_stale_threshold_seconds: int = 600
+    enable_llm_planner: bool = True
+    enable_write_back_guard: bool = True
+    convergence_phase_thresholds: dict[str, float] = Field(default_factory=dict)
+    topic_drift_embedding_threshold: float = 0.5
+    topic_drift_keyword_threshold: float = 0.4
 
     # -- Checkpoint --
     checkpoint_timeout_minutes: int = 30

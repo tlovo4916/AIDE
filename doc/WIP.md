@@ -1,6 +1,6 @@
 # AIDE — 开发进度 WIP
 
-> 最后更新：2026-03-13（Session 10）
+> 最后更新：2026-03-16（Session 12）
 
 ---
 
@@ -9,9 +9,9 @@
 | 阶段 | 规划内容 | 完成度 | 状态 |
 |------|----------|--------|------|
 | Phase 1：基础架构 | Docker、FastAPI、DB、Blackboard、WS | ~90% | ✅ 基本完成 |
-| Phase 2：多智能体核心 | 6 Agent + Orchestrator 主循环 + 并行 Lane | **100%** | ✅ Token 计费链路修复，全流程验证通过 |
+| Phase 2：多智能体核心 | 6 Agent + Orchestrator 主循环 + 并行 Lane | **100%** | ✅ 审计 10 项残留全部修复，E2E 全链路验证通过 |
 | Phase 3：高级研究能力 | 语义检索、真实 RAG、论文导出 | **100%** | ✅ safe_json_loads 统一 + arXiv/S2 入 ChromaDB |
-| Phase 4：产品打磨 | 智能推荐、实验追踪、协作 | ~35% | 🔧 Indigo 主题前端重构 + 研究流水线可视化 + Sidebar 重写 + Session 10 全面测试通过 |
+| Phase 4：产品打磨 | 智能推荐、实验追踪、协作 | ~40% | 🔧 Indigo 主题 + 研究流水线 + Sidebar + 全面测试 + 审计修复 |
 
 ---
 
@@ -35,12 +35,12 @@
 
 ---
 
-## Phase 2：多智能体核心（~98%）
+## Phase 2：多智能体核心（100%）
 
 ### ✅ 已完成
 - **6 个 Agent**：Director、Scientist、Librarian、Writer、Critic、**Synthesizer**（Session 7 新增）
 - OrchestrationEngine 主循环（plan → dispatch → validate → convergence → loop）
-- OrchestratorPlanner（纯规则轮转，含 SYNTHESIZE 阶段序列）
+- **OrchestratorPlanner（LLM 动态调度 + 规则 fallback）**（Session 11）：LLM 根据 board 状态选择 agent，Critic guarantee 每 3 轮，Challenge routing 优先调度被质疑 agent
 - ConvergenceDetector（per-phase Critic 评分阈值 + max-iteration 保护）
 - BacktrackController（矛盾时回退阶段）
 - HeartbeatMonitor（崩溃恢复，stale 阈值可配置 360s）
@@ -72,8 +72,30 @@
 - **并行 Lane 前端进度指示**（Session 8）：LanesStarted/LaneCompleted/SynthesisStarted WS 事件处理 + 进度可视化
 - **Agent action_type 容错**（Session 8）：`_fuzzy_match_action_type()` 模糊匹配 + target 自动填充
 
+- **Planner LLM 动态调度**（Session 11）：`_llm_select()` 根据 board 状态 + 可用 agent + 缺失 artifact + open challenge 选择下一个 agent，`_PHASE_SEQUENCES` 降级为 fallback
+- **Agent Context 按 Role 定制**（Session 11）：`_build_state_summary(role=)` 只传入 agent 的 `primary_artifact_types` + `dependency_artifact_types` 对应的 artifact
+- **Challenge 响应路由**（Session 11）：open challenge 有 `target_agent` 时优先调度该 agent，challenge 内容注入 prompt 醒目位置，`_CHALLENGE_AUTO_DISMISS_AFTER` 2→5
+- **Challenge resolve 后验证**（Session 12）：dispatch 后检查 response 中是否包含 `RESOLVE_CHALLENGE` action，未 resolve 则 log warning
+- **收敛多维度化**（Session 11）：per-phase 差异化阈值（EXPLORE=6.0, HYPOTHESIZE=6.5, EVIDENCE=7.0, COMPOSE=7.5）+ artifact coverage 检查
+- **Critic EMA 评分**（Session 12）：算术平均→指数移动平均（α=0.4），解决早期低分永久拖拽问题
+- **偏题检测三层 fallback**（Session 11）：Embedding 余弦相似度 → jieba 中文分词 → 关键词匹配，阈值 0.2→0.4
+- **偏题注入 agent prompt**（Session 12）：检测到漂移时将 `[⚠️ TOPIC DRIFT WARNING]` 注入下一个 agent 的 task description
+- **WriteBackGuard 规则驱动重写**（Session 11）：从 LLM-based 改为规则检查 agent 是否产出期望 artifact type
+- **记忆机制**（Session 11）：研究完成后 `_generate_lessons_learned()` 生成经验总结，启动时 `_inject_lessons_learned()` 注入最近 5 个项目的经验
+- **Blackboard 内存缓存**（Session 11）：artifact meta 缓存 + write-through
+- **Blackboard L0 + version 缓存**（Session 12）：`_l0_cache` 缓存 L0 内容 + `_version_cache` 缓存版本号，避免文件系统扫描
+- **中文关键词检测**（Session 12）：`has_contradictory_evidence()`/`has_logic_gaps()`/`has_direction_issues()` 支持矛盾/冲突/漏洞/逻辑/偏离/偏题等中文关键词
+- **Agent 非 JSON 重试**（Session 12）：`execute()` 检测到非 JSON 响应后追加 `[RETRY]` 指令重试一次
+- **Critic 依赖 artifact 类型补全**（Session 12）：增加 EVIDENCE_GAPS、EXPERIMENT_GUIDE、TREND_SIGNALS
+- **artifact_type 三层防御**（Session 12）：Prompt 模板加 `artifact_type` 字段 + Planner 任务描述加指令 + `actions.py` `_ROLE_ALLOWED_TYPES` 白名单校验
+- **Lane artifact 截断改善**（Session 12）：3000→6000 字符 + 按 artifact type 分组
+- **Lane async I/O**（Session 12）：`_collect_lane_artifacts()` 改为 aiofiles 异步读取
+- **Lane 研究视角分化**（Session 11）：5 条 `_LANE_PERSPECTIVES`（理论/实证/批评/跨学科/方法创新），每条 lane 注入不同视角
+- **json_mode 支持**（Session 11）：`generate()` 传入 `json_mode=True`，DeepSeek 使用 `response_format={"type": "json_object"}`
+
 ### ❌ 未完成
 - **Agent 输出 Pydantic schema 强校验**：仅靠 JSON parse
+- **Function calling / tool use**：Agent 输出仍为自由格式 JSON，未使用 provider 的 structured output schema
 
 ---
 
@@ -178,6 +200,25 @@
 | **Session 8** | **论文编辑与导出**：前端编辑模式 + PUT 保存 + HTML 可打印导出 |
 | **Session 8** | **action_type 容错**：模糊匹配 + target 自动填充，减少 LLM 输出格式错误 |
 | **Session 8** | **前端 ResearchCompleted/Lane 事件处理**：完成 banner、token 费用、lane 进度 |
+| **Session 11** | **Planner LLM 动态调度**：`_llm_select()` + Critic guarantee + Challenge routing + artifact coverage override |
+| **Session 11** | **Agent context 按 role 定制**：`_build_state_summary(role=)` 只含 agent 关注的 artifact types |
+| **Session 11** | **Challenge 响应路由**：target_agent 优先调度 + challenge 注入 prompt + auto-dismiss 2→5 轮 |
+| **Session 11** | **收敛多维度化**：per-phase 阈值 + artifact coverage 必需检查 |
+| **Session 11** | **偏题检测三层 fallback**：embedding → jieba → keyword，阈值提高到 0.4 |
+| **Session 11** | **WriteBackGuard 规则驱动重写**：不再调用 LLM，改为检查 agent 是否产出期望 artifact |
+| **Session 11** | **记忆机制**：`_generate_lessons_learned()` + `_inject_lessons_learned()` 跨项目经验传递 |
+| **Session 11** | **Blackboard artifact meta 缓存**：write-through 模式 |
+| **Session 11** | **Lane 视角分化**：5 条 `_LANE_PERSPECTIVES` 注入不同研究视角 |
+| **Session 11** | **json_mode 支持**：`generate(json_mode=True)` 减少格式问题 |
+| **Session 12** | **Critic EMA 评分（P0）**：算术平均→指数移动平均（α=0.4），解决早期低分拖拽 |
+| **Session 12** | **Agent 非 JSON 重试**：检测到非 JSON 响应后追加 [RETRY] 指令重试一次 |
+| **Session 12** | **Challenge resolve 后验证**：dispatch 后检查 RESOLVE_CHALLENGE actions |
+| **Session 12** | **中文关键词检测**：challenge 分类支持矛盾/冲突/漏洞/逻辑/偏离/偏题等中文词 |
+| **Session 12** | **偏题注入 agent prompt**：`[⚠️ TOPIC DRIFT WARNING]` 直接注入 task description |
+| **Session 12** | **Blackboard L0 + version 缓存**：`_l0_cache` + `_version_cache` write-through |
+| **Session 12** | **Critic 依赖类型补全**：增加 EVIDENCE_GAPS/EXPERIMENT_GUIDE/TREND_SIGNALS |
+| **Session 12** | **artifact_type 三层防御**：模板 + planner 指令 + `_ROLE_ALLOWED_TYPES` 运行时白名单 |
+| **Session 12** | **Lane artifact 改善**：截断 3000→6000 字符 + 按类型分组 + aiofiles 异步 I/O |
 
 ---
 
@@ -239,30 +280,47 @@
 
 详细踩坑记录见 [doc/devrec.md](devrec.md)。
 
+### Session 12 E2E（审计修复后验证，2026-03-16）
+
+| 指标 | 数据 |
+|------|------|
+| 总耗时 | ~30 分钟 (11:12 - 11:42) |
+| 总迭代数 | ~12 轮 |
+| 总 Token | 51,522 |
+| 总费用 | $0.017 / ¥0.12 |
+| 模型 | deepseek-chat + deepseek-reasoner |
+| 论文产出 | 11 sections |
+| EMA 验证 | α=0.4 正确：7.0→5.80→6.28 |
+| artifact_type 白名单拦截 | 2 次 `trend_signals→hypotheses` |
+| 阶段收敛 | 4/4 全部 critic 质量收敛（无 max_iterations 兜底） |
+
 ---
 
 ## 当前待办（Next Steps）
 
-### P1 — 并行 Lane 实战验证
+### P1 — 架构提升（review 中期目标）
+- [ ] Agent 间 request-response 协议（Agent 输出 `REQUEST_COLLABORATION` action）
+- [ ] Function calling / tool use 替代自由格式 JSON
+- [ ] Planner LLM 增加最近调度历史记忆
+
+### P1 — 并行 Lane
 - [ ] 创建 concurrency=3 项目测试多 lane 并行 + 合成阶段
 - [x] 前端 Lane 进度可视化（Session 8 完成）
 - [ ] Synthesizer 输出质量评估
+- [ ] Lane 间中间交换（阶段结束时交换摘要）
 
 ### P2 — 用户体验
 - [x] 前端 `ResearchCompleted` 处理（Session 8 完成）
 - [ ] 前端 Blackboard 详情视图：点击 artifact 卡片展开 L1/L2 完整内容
 - [x] 论文预览页 + 编辑 + PDF 导出（Session 8 完成）
 
-### P2 — RAG 闭环
-- [x] arXiv/S2 检索结果入 BM25 持久化（Session 8 完成）
-- [x] arXiv/S2 检索结果入 ChromaDB 持久化（Session 9 完成）
-- [x] 统一 `safe_json_loads()` 工具函数（Session 9 完成）
-
 ### P3 — 长期完善
 - [ ] Agent 输出 Pydantic schema 强校验
 - [ ] 多用户 / 协作功能
 - [ ] 研究可视化（假设演化、证据图）
-- [ ] Magic numbers 收进 config.py 统一管理（300s 超时、3000 字符截断等）
+- [ ] Reactive Blackboard 触发机制（KS 激活条件）
+- [ ] Agent-level 记忆（few-shot example 池）
+- [ ] Adversarial lanes（正反方辩证）
 
 ---
 
@@ -306,3 +364,88 @@
 
 ### 测试后清理
 - 删除 29 个测试/压力测试项目，数据库恢复干净状态
+
+---
+
+## Session 11-12（2026-03-15~16）— 二次审计修复 + 全链路验证
+
+### 审计背景
+
+`doc/review.md` 二次审计（2026-03-15）对 10 个批判点逐条复查，发现：
+- 7/10 短期目标已达成
+- 3/10 部分达成
+- 4 个新引入问题（N1-N4）
+- 多个残留问题
+
+### Session 11 修复（审计首次修复轮）
+
+**P0 — Planner 动态调度**
+- `planner.py` 重写：`_llm_select()` 向 LLM 发送 board 状态 + 可用 agent + 缺失 artifact，返回 `{agent, task, rationale}`
+- `_CRITIC_GUARANTEE_INTERVAL = 3`：每 3 轮至少调用一次 Critic
+- Challenge routing：open challenge 有 target_agent 时覆盖 LLM 选择
+- Artifact coverage override：缺失 artifact 时调度能产出该类型的 agent
+- `enable_llm_planner` 配置开关，`_PHASE_SEQUENCES` 保留为 fallback
+
+**P0 — Agent Context 按 Role 定制**
+- `engine.py _build_state_summary(role=)`：从 agent 的 dependency_artifact_types 构建 relevant type set
+- `board.py get_state_summary(relevant_types=)`：只扫描匹配的 artifact type
+- Planner 仍看全量 context（role=None）
+
+**P1 — Challenge 响应路由 + 收敛多维度化 + 偏题检测**
+- Challenge：target_agent 字段 + 优先调度 + prompt 注入 + auto-dismiss 2→5
+- 收敛：per-phase 阈值（6.0/6.5/7.0/7.5）+ `_check_artifact_coverage()` 必需 artifact 检查
+- 偏题：embedding → jieba → keyword 三层 fallback，阈值 0.2→0.4
+
+**P1 — Blackboard 缓存 + WriteBackGuard + 记忆机制**
+- Blackboard artifact meta 缓存（write-through）
+- WriteBackGuard 改为规则驱动，不再调用 LLM
+- `_generate_lessons_learned()` + `_inject_lessons_learned()` 跨项目经验
+
+**其他**
+- Lane 视角分化（5 条 `_LANE_PERSPECTIVES`）
+- json_mode 支持（`generate(json_mode=True)`）
+
+### Session 12 修复（审计残留问题 + 新问题）
+
+**P0 — Critic EMA 评分（N3）**
+- `board.py set_phase_critic_score()`：算术平均→EMA（α=0.4）
+- 实测验证：7.0→5.80→6.28，早期低分不再永久拖拽
+
+**P0 — Agent 非 JSON 重试**
+- `base.py execute()`：检测到非 JSON 响应后追加 `[RETRY]` 指令重试一次
+
+**P1 — 审计残留修复**
+- Challenge resolve 后验证：dispatch 后检查 `RESOLVE_CHALLENGE` actions，未 resolve 则 log warning
+- 中文关键词检测：矛盾/冲突/不一致/相悖/反驳/漏洞/逻辑/缺失/不完整/推理/方向/偏离/偏题/跑偏/离题
+- 偏题注入 agent prompt：`[⚠️ TOPIC DRIFT WARNING]` 直接注入 task description
+- Blackboard L0 + version 缓存：`_l0_cache` + `_version_cache` write-through
+- Critic 依赖类型补全：+EVIDENCE_GAPS/EXPERIMENT_GUIDE/TREND_SIGNALS
+
+**P0 — artifact_type 三层防御**（修复 Scientist 在 hypothesize 阶段写错 artifact_type 的 bug）
+- Layer 1：4 个 prompt 模板增加 `artifact_type` 字段示例 + IMPORTANT 规则
+- Layer 2：planner 任务描述追加 `artifact_type` 指令
+- Layer 3：`actions.py _ROLE_ALLOWED_TYPES` 运行时白名单校验 + 强制修正
+
+**N4 — Lane async I/O**
+- `_collect_lane_artifacts()`：sync `read_text()` → aiofiles 异步读取
+- Lane artifact 截断 3000→6000 字符 + 按 artifact type 分组
+
+### E2E 全链路测试（Session 12）
+
+| 测试项 | 结果 |
+|--------|------|
+| Ruff Lint | 0 issues |
+| Pytest | 77/77 PASS |
+| REST API 集成 | 10/10 PASS |
+| WebSocket | 连接成功 |
+| 并发压力 | 150 req / 0.43s = 351 req/s, 0 错误 |
+| 前端 SSR | 3 页面正常渲染 |
+| **E2E 研究管道** | **4 阶段全部 critic 质量收敛，无 max_iterations 兜底** |
+
+E2E 关键验证：
+- EXPLORE→HYPOTHESIZE→EVIDENCE→COMPOSE→COMPLETE 全链路通过
+- EMA 评分正确运作（7.0→5.80→6.28）
+- artifact_type 白名单 2 次拦截 `trend_signals→hypotheses`
+- hypotheses 目录有 2 个 artifact（之前为 0）
+- 51,522 tokens / $0.017 / ¥0.12 正确记录
+- 11 sections 论文导出到 `exports/paper.md`

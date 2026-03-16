@@ -42,6 +42,13 @@ class Blackboard:
         self._meta_path = self._root / "meta.json"
         self._level_gen = level_generator
         self._action_executor = action_executor
+        # Write-through caches (Blackboard is the sole writer, no TTL needed)
+        self._artifact_cache: dict[str, list[ArtifactMeta]] = {}
+        self._meta_cache: dict[str, Any] | None = None
+        # version cache: "type/artifact_id" -> latest version int
+        self._version_cache: dict[str, int] = {}
+        # L0 content cache: "type/artifact_id/vN" -> L0 text (for get_state_summary)
+        self._l0_cache: dict[str, str] = {}
 
     @property
     def root(self) -> Path:
@@ -61,20 +68,24 @@ class Blackboard:
         for at in ArtifactType:
             (self._root / "artifacts" / at.value).mkdir(parents=True, exist_ok=True)
         if not self._meta_path.exists():
-            await self._write_json(
-                self._meta_path,
-                {
-                    "created_at": datetime.utcnow().isoformat(),
-                    "phase": "explore",
-                    "research_topic": research_topic,
-                },
-            )
+            meta = {
+                "created_at": datetime.utcnow().isoformat(),
+                "phase": "explore",
+                "research_topic": research_topic,
+            }
+            await self._write_json(self._meta_path, meta)
+            self._meta_cache = meta
         elif research_topic:
             # Ensure research_topic is persisted even on restart
             meta = await self.get_project_meta()
             if not meta.get("research_topic"):
                 meta["research_topic"] = research_topic
                 await self._write_json(self._meta_path, meta)
+                self._meta_cache = meta
+        # Initialize artifact cache
+        self._artifact_cache = {}
+        for at in ArtifactType:
+            self._artifact_cache[at.value] = await self._list_artifacts_from_fs(at)
 
     # ------------------------------------------------------------------
     # Artifacts
@@ -95,10 +106,30 @@ class Blackboard:
         await self._write_text(ver_dir / "l2.json", content_l2)
         await self._write_json(base / "meta.json", meta.model_dump(mode="json"))
 
+        # Update write-through caches
+        cache_key = artifact_type.value
+        cached = self._artifact_cache.get(cache_key, [])
+        replaced = False
+        for i, existing in enumerate(cached):
+            if existing.artifact_id == artifact_id:
+                cached[i] = meta
+                replaced = True
+                break
+        if not replaced:
+            cached.append(meta)
+        self._artifact_cache[cache_key] = cached
+
+        # Version cache
+        ver_key = f"{cache_key}/{artifact_id}"
+        self._version_cache[ver_key] = version
+
         if self._level_gen:
             try:
                 l0 = await self._level_gen.generate_l0(content_l2, artifact_type)
                 await self._write_text(ver_dir / "l0.txt", l0)
+                # L0 content cache
+                l0_key = f"{cache_key}/{artifact_id}/v{version}"
+                self._l0_cache[l0_key] = l0
                 l1 = await self._level_gen.generate_l1(content_l2, artifact_type)
                 await self._write_json(ver_dir / "l1.json", l1)
             except Exception as exc:
@@ -139,7 +170,13 @@ class Blackboard:
     ) -> str | dict | None:
         ver_dir = self._artifact_dir(artifact_type, artifact_id) / f"v{version}"
         if level == ContextLevel.L0:
-            return await self._read_text(ver_dir / "l0.txt")
+            l0_key = f"{artifact_type.value}/{artifact_id}/v{version}"
+            if l0_key in self._l0_cache:
+                return self._l0_cache[l0_key]
+            text = await self._read_text(ver_dir / "l0.txt")
+            if text is not None:
+                self._l0_cache[l0_key] = text
+            return text
         if level == ContextLevel.L1:
             return await self._read_json(ver_dir / "l1.json")
         return await self._read_text(ver_dir / "l2.json")
@@ -168,12 +205,19 @@ class Blackboard:
         data.update(kwargs)
         data["updated_at"] = datetime.utcnow().isoformat()
         await self._write_json(path, data)
+        # Sync cache
+        cache_key = artifact_type.value
+        if cache_key in self._artifact_cache:
+            for i, m in enumerate(self._artifact_cache[cache_key]):
+                if m.artifact_id == artifact_id:
+                    self._artifact_cache[cache_key][i] = ArtifactMeta(**data)
+                    break
 
-    async def list_artifacts(
+    async def _list_artifacts_from_fs(
         self,
         artifact_type: ArtifactType,
-        include_superseded: bool = False,
     ) -> list[ArtifactMeta]:
+        """Read all artifact metas from filesystem (for cache init / miss)."""
         type_dir = self._root / "artifacts" / artifact_type.value
         if not type_dir.exists():
             return []
@@ -187,13 +231,26 @@ class Blackboard:
             data = await self._read_json(meta_path)
             if data is None:
                 continue
-            meta = ArtifactMeta(**data)
-            if not include_superseded and meta.superseded:
-                continue
-            results.append(meta)
+            results.append(ArtifactMeta(**data))
         return results
 
+    async def list_artifacts(
+        self,
+        artifact_type: ArtifactType,
+        include_superseded: bool = False,
+    ) -> list[ArtifactMeta]:
+        cache_key = artifact_type.value
+        if cache_key not in self._artifact_cache:
+            self._artifact_cache[cache_key] = await self._list_artifacts_from_fs(artifact_type)
+        cached = self._artifact_cache[cache_key]
+        if include_superseded:
+            return list(cached)
+        return [m for m in cached if not m.superseded]
+
     async def get_latest_version(self, artifact_type: ArtifactType, artifact_id: str) -> int:
+        ver_key = f"{artifact_type.value}/{artifact_id}"
+        if ver_key in self._version_cache:
+            return self._version_cache[ver_key]
         base = self._artifact_dir(artifact_type, artifact_id)
         if not base.exists():
             return 0
@@ -202,7 +259,9 @@ class Blackboard:
             for d in base.iterdir()
             if d.is_dir() and d.name.startswith("v") and d.name[1:].isdigit()
         ]
-        return max(versions) if versions else 0
+        result = max(versions) if versions else 0
+        self._version_cache[ver_key] = result
+        return result
 
     # ------------------------------------------------------------------
     # Messages
@@ -319,21 +378,36 @@ class Blackboard:
     # ------------------------------------------------------------------
 
     async def get_project_meta(self) -> dict[str, Any]:
+        if self._meta_cache is not None:
+            return dict(self._meta_cache)
         data = await self._read_json(self._meta_path)
-        return data or {}
+        self._meta_cache = data or {}
+        return dict(self._meta_cache)
 
     async def update_project_meta(self, **kwargs: Any) -> None:
         meta = await self.get_project_meta()
         meta.update(kwargs)
         meta["updated_at"] = datetime.utcnow().isoformat()
         await self._write_json(self._meta_path, meta)
+        self._meta_cache = meta
 
     # ------------------------------------------------------------------
     # Board Protocol (required by OrchestrationEngine)
     # ------------------------------------------------------------------
 
-    async def get_state_summary(self, level: ContextLevel = ContextLevel.L0) -> str:
-        """Build a panoramic summary of all non-superseded artifacts."""
+    async def get_state_summary(
+        self,
+        level: ContextLevel = ContextLevel.L0,
+        relevant_types: set[ArtifactType] | None = None,
+    ) -> str:
+        """Build a summary of non-superseded artifacts.
+
+        Args:
+            level: Context detail level (L0/L1/L2).
+            relevant_types: If set, only include these artifact types.
+                Research topic, phase/iteration, lane context, and open challenges
+                are always included regardless of this filter.
+        """
         lines: list[str] = []
         meta = await self.get_project_meta()
         phase = meta.get("phase", "explore")
@@ -357,7 +431,15 @@ class Blackboard:
                 f"{lane_context[:40000]}"
             )
 
+        # Inject lessons learned from previous projects (if available)
+        lessons = meta.get("lessons_learned", "")
+        if lessons:
+            lines.append(f"\n## Lessons from Previous Research\n{lessons}\n")
+
+        types_to_scan = relevant_types if relevant_types is not None else set(ArtifactType)
         for at in ArtifactType:
+            if at not in types_to_scan:
+                continue
             metas = await self.list_artifacts(at)
             if not metas:
                 continue
@@ -499,20 +581,34 @@ class Blackboard:
     async def set_phase_critic_score(self, phase: ResearchPhase, score: float) -> None:
         """Persist the critic score for a specific phase.
 
-        Uses max(existing, new) so scores don't regress within a phase —
-        convergence only cares about the best score achieved.
+        Uses Exponential Moving Average (EMA) so recent scores are weighted
+        more heavily, preventing early low scores from permanently dragging
+        down the average.  alpha=0.4 means ~40% weight on the newest score.
+        For the very first score, EMA simply equals that score.
         """
+        ema_alpha = 0.4
+
         meta = await self.get_project_meta()
         phase_scores = meta.get("phase_critic_scores", {})
-        existing = float(phase_scores.get(phase.value, 0.0))
-        final_score = max(existing, score)
-        phase_scores[phase.value] = final_score
-        await self.update_project_meta(phase_critic_scores=phase_scores)
-        if final_score != score:
-            logger.info(
-                "[Board] Phase %s critic score kept at %.1f (incoming %.1f was lower)",
-                phase.value, final_score, score,
-            )
+        phase_counts = meta.get("phase_critic_counts", {})
+        old_ema = float(phase_scores.get(phase.value, 0.0))
+        old_count = int(phase_counts.get(phase.value, 0))
+
+        if old_count == 0:
+            new_ema = score
+        else:
+            new_ema = ema_alpha * score + (1 - ema_alpha) * old_ema
+
+        phase_scores[phase.value] = round(new_ema, 2)
+        phase_counts[phase.value] = old_count + 1
+        await self.update_project_meta(
+            phase_critic_scores=phase_scores,
+            phase_critic_counts=phase_counts,
+        )
+        logger.info(
+            "[Board] Phase %s critic score: %.1f → EMA %.2f (α=%.1f, n=%d)",
+            phase.value, score, new_ema, ema_alpha, old_count + 1,
+        )
 
     async def get_recent_revision_count(self, rounds: int) -> int:
         """Count artifacts that have version > 1 (indicating revisions)."""
@@ -557,26 +653,33 @@ class Blackboard:
         await self.update_project_meta(**{key: value})
 
     async def has_contradictory_evidence(self) -> bool:
+        keywords =("contradict", "矛盾", "冲突", "不一致", "相悖", "反驳")
         challenges = await self.list_challenges()
         for ch in challenges:
-            if ch.status == ChallengeStatus.OPEN and "contradict" in ch.argument.lower():
-                return True
+            if ch.status == ChallengeStatus.OPEN:
+                arg = ch.argument.lower()
+                if any(kw in arg for kw in keywords):
+                    return True
         return False
 
     async def has_logic_gaps(self) -> bool:
+        keywords =("gap", "logic", "漏洞", "逻辑", "缺失", "不完整", "推理")
         challenges = await self.list_challenges()
         for ch in challenges:
-            if ch.status == ChallengeStatus.OPEN and (
-                "gap" in ch.argument.lower() or "logic" in ch.argument.lower()
-            ):
-                return True
+            if ch.status == ChallengeStatus.OPEN:
+                arg = ch.argument.lower()
+                if any(kw in arg for kw in keywords):
+                    return True
         return False
 
     async def has_direction_issues(self) -> bool:
+        keywords =("direction", "方向", "偏离", "偏题", "跑偏", "离题")
         challenges = await self.list_challenges()
         for ch in challenges:
-            if ch.status == ChallengeStatus.OPEN and "direction" in ch.argument.lower():
-                return True
+            if ch.status == ChallengeStatus.OPEN:
+                arg = ch.argument.lower()
+                if any(kw in arg for kw in keywords):
+                    return True
         return False
 
     async def serialize(self) -> dict[str, Any]:

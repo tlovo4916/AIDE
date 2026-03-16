@@ -256,14 +256,18 @@ record_usage() 从未被调用 → token_usage 表永远为空
 - **per-phase critic score**：避免旧阶段高分导致新阶段秒收敛。
 - **多 provider fallback chain**（Session 7 新增）：任何一个 provider 失败都能自动降级到其他 provider。
 - **S2 冷却期设计**（Session 7）：用类变量共享冷却状态，所有 Librarian 实例都能受益。
+- **三层防御模式**（Session 12）：artifact_type 用 Prompt+Planner+Runtime 三层控制，每层独立有效且互相兜底。可推广到其他 LLM 输出控制场景。
+- **EMA 替代算术平均**（Session 12）：α=0.4 让最近评分权重更高，解决了早期低分永久拖拽收敛的问题。
+- **审计驱动开发**（Session 11-12）：系统性的 review.md 审计报告→逐条修复→E2E 验证闭环，比零散修 bug 高效得多。
 
 ### 需要改进的
-- ~~**LLM 输出解析缺乏统一层**：fence 剥离、JSON 解析、score 提取散落在各处~~（Session 9 已解决：`backend/utils/json_utils.py` 中的 `safe_json_loads()` 统一了所有 JSON 解析入口）
+- ~~**LLM 输出解析缺乏统一层**~~（Session 9 已解决：`safe_json_loads()` 统一了所有 JSON 解析入口）
+- ~~**Claude non-JSON hack**~~（Session 11 已解决：`json_mode=True` 替代了 `if model.startswith("claude-")` 硬编码）
 - **fallback 代码从未被测试**：每次写 fallback 都是"写完就忘"，直到生产环境触发才发现崩溃。需要对 fallback 路径做专门的测试。
-- **Magic numbers 太多**：300s 超时、360s stale、30K token budget、3000 字符截断、5min S2 cooldown——应该全部收进 `config.py` 统一管理。
-- **不同 LLM 的适配层不够**：Claude 和 DeepSeek 对 JSON 格式指令的遵循度差异很大，当前的适配是在 `base.py` 里硬编码的 `if model.startswith("claude-")`，不够优雅。应该在 provider 层或 router 层做模型族级别的适配。
+- **Magic numbers 太多**：300s 超时、360s stale、30K token budget——应该全部收进 `config.py` 统一管理（3000→6000 截断已在 Session 12 修复）。
 - **可选参数默认 None 的隐形风险**（Session 8 教训）：`generate(project_id=None)` 导致计费从未触发。关键功能参数不应该用 None 默认值静默跳过，应该至少产生一条 warning 日志。
 - **跨文件复制粘贴遗漏**（Session 8 教训）：factory.py 中 6 个 agent 构造只有 1 个传了 project_id，是典型的复制粘贴遗漏。批量构造应考虑用循环或 factory 函数统一参数。
+- **中期架构挑战仍在**（Session 12 审计总结）：agent 间无法直接通信、Blackboard 是被动 CRUD、Lane 完全隔离——这些需要架构级变动，不是修 bug 能解决的。
 
 ---
 
@@ -294,3 +298,103 @@ record_usage() 从未被调用 → token_usage 表永远为空
 - **宿主机 localhost 可能被代理拦截**：测试脚本应从容器内执行（`docker compose exec`），避免 502 误报
 - **压力测试应自带清理**：20 个 POST 请求创建了 20 个 Stress 项目，需要手动清理。建议压力测试脚本自带 teardown
 - **ruff/pytest 未安装在 Docker 镜像中**：需要手动 pip install，应加入 pyproject.toml dev 依赖或 Dockerfile
+
+---
+
+## 12. Scientist 写错 artifact_type — Agent 角色不控制其写入目标
+
+**现象（Session 12）**：在多通道项目中，Lane 2 的 hypothesize 阶段产出为 0。Critic 反复指出"不存在任何 hypotheses 工件"，4 轮迭代全部失败，靠 `max_iterations` 超时强推。
+
+**根因链**：
+```
+Scientist.j2 模板没有 artifact_type 字段示例
+    ↓
+LLM 输出 JSON 中不含 artifact_type 或随意填了 "directions"
+    ↓
+actions.py:119 fallback 到 action.target（可能是 "directions"）
+    ↓
+ArtifactType("directions") 合法 → 写入 directions/ 目录
+    ↓
+hypotheses/ 目录始终为空 → 后续阶段全部质量极低
+```
+
+**对比**：Critic.j2 和 Synthesizer.j2 **已经有** `artifact_type` 字段（`"review"` / `"draft"`），所以不出问题。Director、Scientist、Writer、Librarian 的模板全部缺失。
+
+**修复（三层防御）**：
+1. **Prompt 模板**：4 个模板增加 `artifact_type` 字段示例 + IMPORTANT 规则
+2. **Planner 任务描述**：追加 `"You MUST write artifacts with artifact_type='hypotheses'"` 指令
+3. **Runtime 白名单**：`actions.py _ROLE_ALLOWED_TYPES` 定义每个 agent 角色允许写入的 artifact type，不在白名单内则强制修正
+
+**实测验证**：Layer 3 在 E2E 测试中 2 次拦截 Scientist 尝试写入 `trend_signals`，自动修正为 `hypotheses`。
+
+**教训**：
+- **Agent 角色 ≠ 写入控制**。系统没有任何机制阻止 Scientist 写入 `directions`（那是 Director 的产物）。当 LLM 输出错误的 `artifact_type` 时，系统会忠实地执行——这是一个**权限模型缺失**的问题。
+- **三层防御比单层可靠**。Prompt 是"建议"（LLM 可能忽略），Planner 任务描述是"强调"（仍可能被忽略），Runtime 白名单是"强制"（不可绕过）。只做 Prompt 层不够，只做 Runtime 层会产生大量修正日志。三层结合：大部分由 Prompt 解决（最佳质量），少量由 Runtime 兜底（最终安全网）。
+- **bug 的可见性很低**。`directions/` 目录有内容（来自 Director 和被错误写入的 Scientist 产出），`hypotheses/` 为空容易被忽略。只有当 Critic 反复抱怨才会注意到。
+
+---
+
+## 13. 累积平均分的惯性陷阱 — 早期低分永久拖拽收敛
+
+**现象（Session 12 审计 N3）**：EXPLORE 阶段前 4 轮 critic 分数 4、5、5、8，算术平均 = 5.5 < 阈值 6.0，阶段不收敛，被 `max_iterations` 兜底推进。第 4 轮质量已经达标（8 分），但被早期低分"污染"。
+
+**根因**：`set_phase_critic_score()` 使用简单算术平均 `(old_avg * count + score) / (count + 1)`，每个历史分数权重相等。改进后的高分被稀释。
+
+**修复**：改为**指数移动平均（EMA）** α=0.4：
+```python
+new_ema = alpha * score + (1 - alpha) * old_ema
+```
+α=0.4 表示新分数权重 40%，历史权重 60%。3 轮后历史影响衰减到 21.6%（0.6³），有效窗口约 3-4 轮。
+
+**实测**：EMA 下 7.0→5.80→6.28（第 3 轮即超过 6.0 阈值收敛），算术平均下同样的分数 7.0→5.5→5.67（第 3 轮仍不够）。
+
+**教训**：
+- **评分聚合方式直接影响系统行为**。算术平均适合"所有历史等权"的场景，但质量评判需要"最近改进更重要"——EMA 或滑动窗口更合适。
+- **α 值选择是 trade-off**：α 太大（如 0.8）相当于只看最近一次分数，波动大；α 太小（如 0.1）和算术平均差不多。0.3-0.5 是合理范围。
+
+---
+
+## 14. 二次审计的系统性复盘
+
+**审计日期**：2026-03-15（`doc/review.md`）
+
+### 审计覆盖了什么
+10 个批判点（Planner 调度、Blackboard 架构、Agent context、Challenge、收敛检测、偏题检测、并行 Lane、Structured output、记忆机制、WriteBackGuard），每个点都从"修复了什么"和"残留什么"两个维度分析。
+
+### 修复统计
+
+| 类别 | 数量 | 说明 |
+|------|------|------|
+| 审计项总数 | 10 个原始 + 4 个新引入 = 14 项 |  |
+| 已修复 | 13 项 | 包括所有 P0/P1 残留 |
+| 已缓解 | 1 项 | N1 prompt 注入（低风险） |
+| 中期目标未实现 | ~6 项 | agent 间通信、reactive blackboard、lane 交换等 |
+
+### 关键设计教训
+
+1. **三层防御优于单层修复**：artifact_type 问题用 Prompt + Planner + Runtime 三层解决，每层独立有效且互相兜底。这个模式可以推广到其他 LLM 输出控制问题。
+
+2. **确定性信息优先于 LLM 输出**：Critic 分数提取用 `agent_role`（确定性）而非 `artifact_type`（LLM 输出）；artifact_type 白名单用 agent 角色（确定性）而非 LLM 输出的 type 字段。**凡是可以用请求侧信息替代 LLM 输出的，都应该替代**。
+
+3. **审计+修复+验证 的闭环**：首次审计→修复→二次审计→残留修复→E2E 验证。没有 E2E 验证的修复不算完成——Session 12 的全链路测试发现了 Layer 3 实际拦截行为，确认修复有效。
+
+4. **短期止血 vs 中期架构的权衡**：审计列出了明确的短/中/长期目标。当前全部短期目标已完成，但中期目标（agent 间通信、reactive blackboard、tool use）需要更大的架构变动，不适合在修复轮中做。
+
+---
+
+## 性能基线对比（更新）
+
+### Session 6 vs Session 8 vs Session 12
+
+| 指标 | Session 6 (纯 DeepSeek) | Session 8 Run 2 (计费修复后) | Session 12 (审计修复后) |
+|------|-------------------------|------------------------------|------------------------|
+| 总耗时 | 33m51s | ~37min | ~30min |
+| 迭代数 | 14 | 14 | ~12 |
+| 总 Token | 未记录 | 104,719 | 51,522 |
+| 总费用 | 未记录 | $0.77 / 5.58 RMB | $0.017 / 0.12 RMB |
+| non-JSON | 0 | 0 | 0 |
+| 阶段收敛 | 靠 max_iterations | 混合（部分质量/部分超时） | **4/4 全部质量收敛** |
+| artifact_type 错误 | 未检测 | 未检测 | 2 次拦截并修正 |
+| 论文产出 | ~6KB | 22KB 9 sections | 11 sections |
+
+**关键改进**：Session 12 是首次 4 个阶段全部通过 Critic 质量评判收敛（无 `max_iterations` 兜底），验证了 EMA + per-phase 阈值 + artifact coverage 三重收敛机制的有效性。

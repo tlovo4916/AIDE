@@ -250,7 +250,7 @@ async def start_project(
     pid = str(project_id)
     # 允许 "running" 状态下引擎已死时重新启动
     dead_engine = project.status == "running" and not engine_factory.is_running(pid)
-    if project.status not in ("active", "paused") and not dead_engine:
+    if project.status not in ("active", "paused", "stopped") and not dead_engine:
         raise HTTPException(400, "Project cannot be started in current state")
 
     if engine_factory.is_running(pid):
@@ -262,6 +262,24 @@ async def start_project(
 
     await engine_factory.start_engine(pid)
 
+    return project
+
+
+@router.post("/{project_id}/stop", response_model=ProjectOut)
+async def stop_project(
+    project_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+) -> Project:
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    pid = str(project_id)
+    engine_factory.stop_engine(pid, cancel=True)
+
+    project.status = "stopped"
+    await session.commit()
+    await session.refresh(project)
     return project
 
 
