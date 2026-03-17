@@ -130,6 +130,13 @@ class Settings(BaseSettings):
     eval_loop_jaccard_threshold: float = 0.8
     eval_interval: int = 3
 
+    # -- Adaptive Planner (Phase 4) --
+    adaptive_phase_bonus: float = 0.2
+    adaptive_non_phase_penalty: float = 0.3
+    adaptive_request_bonus_cap: float = 0.5
+    adaptive_repetition_penalty: float = 0.15
+    adaptive_tie_threshold: float = 0.1
+
     # -- Migration --
     migrate_on_start: bool = False
 

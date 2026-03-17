@@ -130,6 +130,8 @@ class OrchestrationEngine:
         lane_index: int | None = None,
         embedding_service: Any | None = None,
         evaluator: Any | None = None,
+        state_analyzer: Any | None = None,
+        info_request_service: Any | None = None,
     ) -> None:
         self._project_id = project_id
         self._board = board
@@ -148,6 +150,8 @@ class OrchestrationEngine:
         self._embedding_service = embedding_service
 
         self._evaluator = evaluator
+        self._state_analyzer = state_analyzer
+        self._info_service = info_request_service
 
         self._running = False
         self._phase = ResearchPhase.EXPLORE
@@ -236,7 +240,36 @@ class OrchestrationEngine:
                 if self._research_topic and self._iteration > 1:
                     await self._check_on_topic(summary)
 
-                # 2. Plan next action (compute missing artifacts for coverage loop)
+                # 2. Adaptive state analysis (feature-flagged)
+                research_state = None
+                if self._state_analyzer:
+                    try:
+                        pending_requests: dict[str, int] = {}
+                        if self._info_service:
+                            pending_requests = (
+                                await self._info_service.get_pending_count_by_responder()
+                            )
+                        hist = self._planner._selection_history.get(
+                            self._phase.value, []
+                        )
+                        research_state = await self._state_analyzer.analyze(
+                            self._board,
+                            self._phase,
+                            self._iteration,
+                            selection_history=hist,
+                            pending_requests=pending_requests,
+                            eval_composite=self._last_eval_composite,
+                            info_gain=self._last_info_gain,
+                            is_diminishing=self._last_is_diminishing,
+                            topic_drift=self._topic_drift_detected,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "[Engine] State analysis failed (non-fatal), "
+                            "falling back to standard planner"
+                        )
+
+                # 2b. Plan next action (compute missing artifacts for coverage loop)
                 logger.info("[Engine] Calling planner...")
                 open_challenges = await self._board.get_open_challenges()
                 required = get_phase_required_artifacts(self._phase)
@@ -257,6 +290,7 @@ class OrchestrationEngine:
                     self._iteration,
                     open_challenges=open_challenges or None,
                     missing_artifact_types=missing or None,
+                    research_state=research_state,
                 )
                 logger.info(
                     "[Engine] Planner decided: agent=%s, task=%s",
@@ -478,6 +512,23 @@ class OrchestrationEngine:
                 f"Please ensure your output stays focused on this topic."
             )
 
+        # Inject pending InfoRequests for this agent (max 3); cache for reuse
+        cached_pending: list[dict] = []
+        if self._info_service:
+            try:
+                cached_pending = await self._info_service.get_pending_for(
+                    decision.agent_to_invoke
+                )
+                if cached_pending:
+                    req_lines = ["\n\n[PENDING INFO REQUESTS — please address these]"]
+                    for req in cached_pending[:3]:
+                        req_lines.append(
+                            f"From {req['requester']}: {req['question'][:300]}"
+                        )
+                    task_desc += "\n".join(req_lines)
+            except Exception:
+                logger.debug("[Engine] InfoRequest injection failed (non-fatal)")
+
         # Inject pending challenges targeted at this agent into the task description
         agent_challenges = [
             ch
@@ -529,6 +580,19 @@ class OrchestrationEngine:
                     logger.warning("SubAgent %s failed: %s", sr.subagent_id, sr.error)
 
         self._heartbeat.record_agent_status(decision.agent_to_invoke.value, "idle")
+
+        # Mark InfoRequests as responded (reuse cached pending, no extra DB query)
+        if self._info_service and cached_pending:
+            try:
+                resp_text = (
+                    response.reasoning_summary[:500]
+                    if response.reasoning_summary
+                    else "(agent produced output)"
+                )
+                for req in cached_pending[:3]:
+                    await self._info_service.respond(req["request_id"], resp_text)
+            except Exception:
+                logger.debug("[Engine] InfoRequest response marking failed (non-fatal)")
 
         # Post-check: did the agent actually resolve its challenges?
         if agent_challenges:

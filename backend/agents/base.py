@@ -70,10 +70,16 @@ class BaseAgent(ABC):
         llm_router: LLMRouter,
         write_back_guard: WriteBackGuard,
         project_id: str = "",
+        info_request_service: object | None = None,
+        evaluator: object | None = None,
+        board: object | None = None,
     ) -> None:
         self._llm_router = llm_router
         self._write_back_guard = write_back_guard
         self._project_id = project_id
+        self._info_service = info_request_service
+        self._evaluator = evaluator
+        self._board = board
         self._jinja_env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(str(_PROMPTS_DIR)),
             autoescape=False,
@@ -88,7 +94,26 @@ class BaseAgent(ABC):
         """Return the model to use, respecting per-lane → global → default priority."""
         return self._llm_router.resolve_model(self.role)
 
+    async def pre_execute(self, context: str, task: AgentTask) -> str:
+        """Hook called before prompt building. Override to enrich context.
+
+        Default: return context unchanged. Subclasses can inject structured
+        summaries (research maps, hypothesis registries, etc.) — no LLM calls.
+        """
+        return context
+
+    async def post_execute(
+        self, response: AgentResponse, context: str, task: AgentTask
+    ) -> AgentResponse:
+        """Hook called after response parsing. Override for validation/side-effects.
+
+        Default: return response unchanged. Subclasses can validate output,
+        create InfoRequests, log warnings, etc. — no LLM calls.
+        """
+        return response
+
     async def execute(self, context: str, task: AgentTask) -> AgentResponse:
+        context = await self.pre_execute(context, task)
         prompt = self._build_prompt(context, task)
         model = self._resolve_model()
 
@@ -143,6 +168,7 @@ class BaseAgent(ABC):
         if not self.can_spawn_subagents:
             response.subagent_requests = []
 
+        response = await self.post_execute(response, context, task)
         return response
 
     # ------------------------------------------------------------------

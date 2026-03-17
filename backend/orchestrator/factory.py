@@ -183,37 +183,73 @@ async def _create_engine(
 
     write_back_guard = WriteBackGuard(llm_call=llm_call)
 
+    # Phase 4: Adaptive planner components (feature-flagged)
+    state_analyzer = None
+    dispatch_scorer = None
+    info_service = None
+    if settings.use_adaptive_planner:
+        from backend.orchestrator.dispatch_scorer import DispatchScorer
+        from backend.orchestrator.info_request_service import InfoRequestService
+        from backend.orchestrator.state_analyzer import ResearchStateAnalyzer
+
+        state_analyzer = ResearchStateAnalyzer(async_session_factory, str(project_id))
+        dispatch_scorer = DispatchScorer()
+        info_service = InfoRequestService(async_session_factory, str(project_id))
+        logger.info("[Factory] Adaptive planner enabled for project %s", project_id)
+
+    # Phase 3: Evaluator (created early so CriticAgent can reference it)
+    evaluator = None
+    if settings.use_multi_eval:
+        from backend.evaluation.evaluator import EvaluatorService
+
+        evaluator = EvaluatorService(
+            llm_router, project_id=str(project_id), embedding_service=embedding_service,
+        )
+
     agents: dict[AgentRole, Any] = {
         AgentRole.DIRECTOR: DirectorAgent(
             llm_router,
             write_back_guard,
             project_id=str(project_id),
+            info_request_service=info_service,
+            board=board,
         ),
         AgentRole.SCIENTIST: ScientistAgent(
             llm_router,
             write_back_guard,
             project_id=str(project_id),
+            info_request_service=info_service,
+            board=board,
         ),
         AgentRole.LIBRARIAN: LibrarianAgent(
             llm_router,
             write_back_guard,
             project_id=str(project_id),
             embedding_model=embedding_model,
+            info_request_service=info_service,
+            board=board,
         ),
         AgentRole.WRITER: WriterAgent(
             llm_router,
             write_back_guard,
             project_id=str(project_id),
+            info_request_service=info_service,
+            board=board,
         ),
         AgentRole.CRITIC: CriticAgent(
             llm_router,
             write_back_guard,
             project_id=str(project_id),
+            info_request_service=info_service,
+            evaluator=evaluator,
+            board=board,
         ),
         AgentRole.SYNTHESIZER: SynthesizerAgent(
             llm_router,
             write_back_guard,
             project_id=str(project_id),
+            info_request_service=info_service,
+            board=board,
         ),
     }
 
@@ -222,6 +258,7 @@ async def _create_engine(
         research_topic=research_topic,
         lane_perspective=lane_perspective,
         event_bus=event_bus,
+        dispatch_scorer=dispatch_scorer,
     )
     convergence = ConvergenceDetector()
     backtrack = BacktrackController()
@@ -247,14 +284,6 @@ async def _create_engine(
         except Exception:
             logger.warning("Failed to update DB phase for project %s", project_id)
 
-    evaluator = None
-    if settings.use_multi_eval:
-        from backend.evaluation.evaluator import EvaluatorService
-
-        evaluator = EvaluatorService(
-            llm_router, project_id=str(project_id), embedding_service=embedding_service,
-        )
-
     engine = OrchestrationEngine(
         project_id=project_id,
         board=board,
@@ -271,6 +300,8 @@ async def _create_engine(
         lane_index=lane_index,
         embedding_service=embedding_service,
         evaluator=evaluator,
+        state_analyzer=state_analyzer,
+        info_request_service=info_service,
     )
 
     subagent_pool = SubAgentPool(llm_router)

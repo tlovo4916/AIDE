@@ -51,9 +51,69 @@ class LibrarianAgent(BaseAgent):
         write_back_guard,
         project_id: str = "",
         embedding_model: str | None = None,
+        info_request_service: object | None = None,
+        board: object | None = None,
     ) -> None:
-        super().__init__(llm_router, write_back_guard, project_id=project_id)
+        super().__init__(
+            llm_router,
+            write_back_guard,
+            project_id=project_id,
+            info_request_service=info_request_service,
+            board=board,
+        )
         self._embedding_model = embedding_model
+
+    async def pre_execute(self, context: str, task: AgentTask) -> str:
+        """Extract evidence gaps from board artifacts for targeted search."""
+        lines: list[str] = []
+
+        # Query board for evidence gaps and unsupported hypotheses
+        if self._board:
+            try:
+                gaps_artifacts = await self._board.list_artifacts(ArtifactType.EVIDENCE_GAPS)
+                hypotheses = await self._board.list_artifacts(ArtifactType.HYPOTHESES)
+                evidence = await self._board.list_artifacts(ArtifactType.EVIDENCE_FINDINGS)
+
+                if gaps_artifacts or (hypotheses and not evidence):
+                    lines.append("\n## Evidence Gaps (from board)")
+                    if gaps_artifacts:
+                        lines.append(f"  Explicit gap artifacts: {len(gaps_artifacts)}")
+                        for g in gaps_artifacts[-3:]:
+                            text = g if isinstance(g, str) else str(g)
+                            lines.append(f"  - {text[:200]}")
+                    if hypotheses and not evidence:
+                        lines.append(
+                            f"  ⚠️ {len(hypotheses)} hypotheses exist with "
+                            f"NO supporting evidence — prioritize evidence search"
+                        )
+                    elif hypotheses and evidence:
+                        lines.append(
+                            f"  Hypotheses: {len(hypotheses)}, "
+                            f"Evidence: {len(evidence)}"
+                        )
+            except Exception as exc:
+                logger.debug("[Librarian] Board query failed: %s", exc)
+
+        # Fallback: regex scan context for gap mentions
+        if not lines:
+            gap_kw = r"(?:evidence gap|gap in|lacking evidence|需要更多证据|证据不足)"
+            gap_patterns = [
+                re.compile(gap_kw + r"[:\s]*(.*?)(?:\n|$)", re.I),
+                re.compile(r"(?:no evidence for|unsupported)[:\s]*(.*?)(?:\n|$)", re.I),
+            ]
+            gaps: list[str] = []
+            for pattern in gap_patterns:
+                gaps.extend(pattern.findall(context))
+            if gaps:
+                lines.append("\n## Evidence Gaps (from context)")
+                for gap in gaps[:5]:
+                    gap_text = gap.strip()[:200]
+                    if len(gap_text) > 5:
+                        lines.append(f"  - {gap_text}")
+
+        if lines:
+            return context + "\n" + "\n".join(lines)
+        return context
 
     async def execute(self, context: str, task: AgentTask) -> AgentResponse:
         enriched = await self._enrich_context_with_literature(context, task)

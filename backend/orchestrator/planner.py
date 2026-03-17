@@ -215,6 +215,10 @@ class OrchestratorPlanner:
     the next agent based on the current board state. If the LLM call fails
     or returns an invalid agent, it falls back to the deterministic sequence.
 
+    When `use_adaptive_planner` is True and a ResearchState is provided,
+    the planner uses the DispatchScorer for deterministic state-aware
+    scheduling, only falling back to LLM for tie-breaking.
+
     A Critic guarantee ensures the critic is invoked at least every
     _CRITIC_GUARANTEE_INTERVAL iterations regardless of LLM choice.
     """
@@ -225,11 +229,13 @@ class OrchestratorPlanner:
         research_topic: str = "",
         lane_perspective: str = "",
         event_bus: object | None = None,
+        dispatch_scorer: object | None = None,
     ) -> None:
         self._llm_router = llm_router
         self._research_topic = research_topic
         self._lane_perspective = lane_perspective
         self._event_bus = event_bus
+        self._dispatch_scorer = dispatch_scorer
         self._critic_last_iter: dict[str, int] = {}  # phase.value -> last iter critic was called
         # History buffer: phase.value -> list of (iteration, agent.value) tuples (last 5)
         self._selection_history: dict[str, list[tuple[int, str]]] = {}
@@ -241,10 +247,19 @@ class OrchestratorPlanner:
         iteration: int,
         open_challenges: list[ChallengeRecord] | None = None,
         missing_artifact_types: list[ArtifactType] | None = None,
+        research_state: object | None = None,
     ) -> OrchestratorDecision:
         # Determine valid agents for this phase
         sequence = _PHASE_SEQUENCES.get(phase, [AgentRole.CRITIC])
-        valid_agents = set(sequence)
+        if settings.use_adaptive_planner and self._dispatch_scorer and research_state is not None:
+            # Soft constraints: ALL agents are candidates; DispatchScorer applies
+            # phase bonus/penalty so cross-phase agents can still win if need is high
+            valid_agents = {
+                AgentRole.LIBRARIAN, AgentRole.DIRECTOR, AgentRole.SCIENTIST,
+                AgentRole.WRITER, AgentRole.CRITIC, AgentRole.SYNTHESIZER,
+            }
+        else:
+            valid_agents = set(sequence)
 
         # Drain events from the event bus and enrich context
         event_notes: list[str] = []
@@ -281,6 +296,15 @@ class OrchestratorPlanner:
                 "[Planner] Forcing CRITIC (last at iter %d, now %d)",
                 last_critic,
                 iteration,
+            )
+        elif settings.use_adaptive_planner and self._dispatch_scorer and research_state is not None:
+            # Adaptive path: use DispatchScorer
+            agent, rationale = await self._adaptive_select(
+                board_state_summary,
+                phase,
+                iteration,
+                valid_agents,
+                research_state,
             )
         elif settings.enable_llm_planner:
             # Try LLM-based selection
@@ -328,9 +352,18 @@ class OrchestratorPlanner:
                     )
                     break
 
-        # Build task description
-        task_map = _PHASE_TASKS.get(phase, {})
-        base_task = task_map.get(agent, f"Perform your role duties for the {phase.value} phase.")
+        # Build task description (adaptive or standard)
+        if (
+            settings.use_adaptive_planner
+            and research_state is not None
+            and hasattr(research_state, "missing_types")
+        ):
+            base_task = self._build_adaptive_task(agent, research_state, phase)
+        else:
+            task_map = _PHASE_TASKS.get(phase, {})
+            base_task = task_map.get(
+                agent, f"Perform your role duties for the {phase.value} phase."
+            )
 
         task_desc = base_task
 
@@ -376,6 +409,120 @@ class OrchestratorPlanner:
             trigger_checkpoint=False,
             rationale=rationale,
         )
+
+    async def _adaptive_select(
+        self,
+        board_state_summary: str,
+        phase: ResearchPhase,
+        iteration: int,
+        valid_agents: set[AgentRole],
+        research_state: object,
+    ) -> tuple[AgentRole, str]:
+        """Use DispatchScorer for state-aware agent selection.
+
+        Falls back to LLM tie-breaker if top-2 scores are within threshold.
+        """
+        from backend.orchestrator.state_analyzer import ResearchState
+
+        if not isinstance(research_state, ResearchState):
+            # Fallback if wrong type
+            return self._rule_select(phase, iteration, None)
+
+        hist = self._selection_history.get(phase.value, [])
+        scores = self._dispatch_scorer.score_agents(
+            research_state, phase, valid_agents, selection_history=hist
+        )
+        if not scores:
+            return self._rule_select(phase, iteration, None)
+
+        top = scores[0]
+
+        # Tie-breaker: if top 2 are within threshold, ask LLM
+        if len(scores) >= 2:
+            runner_up = scores[1]
+            if (top.total - runner_up.total) < settings.adaptive_tie_threshold:
+                logger.info(
+                    "[Planner] Tie: %s(%.2f) vs %s(%.2f), asking LLM",
+                    top.role.value,
+                    top.total,
+                    runner_up.role.value,
+                    runner_up.total,
+                )
+                # Restrict LLM choice to the tied candidates
+                tied = {top.role, runner_up.role}
+                llm_agent, llm_rationale = await self._llm_select(
+                    board_state_summary,
+                    phase,
+                    iteration,
+                    tied,
+                )
+                if llm_agent is not None:
+                    return llm_agent, f"Adaptive tie-break (LLM): {llm_rationale}"
+
+        rationale = f"Adaptive: {top.role.value}={top.total:.2f} ({top.rationale[:80]})"
+        return top.role, rationale
+
+    def _build_adaptive_task(
+        self,
+        agent: AgentRole,
+        research_state: object,
+        phase: ResearchPhase,
+    ) -> str:
+        """Build a task description enriched with gap-specific instructions."""
+        from backend.orchestrator.state_analyzer import ResearchState
+
+        task_map = _PHASE_TASKS.get(phase, {})
+        base = task_map.get(agent, f"Perform your role duties for the {phase.value} phase.")
+
+        if not isinstance(research_state, ResearchState):
+            return base
+
+        extras: list[str] = []
+        state = research_state
+
+        if agent == AgentRole.LIBRARIAN and state.unsupported_hypothesis_count > 0:
+            extras.append(
+                f"⚠️ {state.unsupported_hypothesis_count} hypotheses lack supporting evidence. "
+                "Prioritize finding evidence for existing hypotheses."
+            )
+        elif agent == AgentRole.SCIENTIST and state.hypothesis_count == 0:
+            extras.append(
+                "⚠️ No hypotheses exist yet. Focus on formulating initial hypotheses."
+            )
+        elif agent == AgentRole.DIRECTOR and state.iterations_without_progress > 3:
+            extras.append(
+                f"⚠️ Research has stagnated for {state.iterations_without_progress} iterations. "
+                "Reassess strategy and identify new directions."
+            )
+        elif agent == AgentRole.WRITER:
+            if not state.has_outline:
+                extras.append("⚠️ No outline exists. Create a paper outline first.")
+            elif not state.has_draft:
+                extras.append("⚠️ Outline exists but no draft. Write the first draft.")
+        elif agent == AgentRole.CRITIC and state.review_count == 0:
+            extras.append(
+                "⚠️ No reviews exist yet. Perform a comprehensive first review."
+            )
+        elif agent == AgentRole.SYNTHESIZER:
+            if state.phase == ResearchPhase.SYNTHESIZE:
+                extras.append(
+                    "⚠️ Synthesis phase: integrate findings from all research lanes. "
+                    "Compare hypotheses, weigh evidence quality, identify consensus "
+                    "and contradictions across lanes."
+                )
+            if state.contradiction_count > 0:
+                extras.append(
+                    f"⚠️ {state.contradiction_count} contradictions detected. "
+                    "Address conflicting evidence in your synthesis."
+                )
+
+        if state.missing_types:
+            missing_str = ", ".join(at.value for at in state.missing_types[:5])
+            extras.append(f"Missing artifacts for this phase: {missing_str}")
+
+        if extras:
+            return base + "\n\n" + "\n".join(extras)
+        return base
 
     async def _llm_select(
         self,
