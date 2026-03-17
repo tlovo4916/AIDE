@@ -1026,7 +1026,8 @@ class TestClaimStoreRoundTrip:
 
         with patch("backend.models.async_session_factory", mock_factory):
             ids = await ClaimStore.save_claims(
-                "12345678-1234-1234-1234-123456789012", claims,
+                "12345678-1234-1234-1234-123456789012",
+                claims,
             )
 
         assert len(ids) == 2
@@ -1111,10 +1112,16 @@ class TestContradictionStoreRoundTrip:
         mock_factory = MagicMock(return_value=mock_ctx)
 
         claim_a = Claim(
-            claim_id="c1", text="Claim A", source_artifact="a", confidence="strong",
+            claim_id="c1",
+            text="Claim A",
+            source_artifact="a",
+            confidence="strong",
         )
         claim_b = Claim(
-            claim_id="c2", text="Claim B", source_artifact="b", confidence="moderate",
+            claim_id="c2",
+            text="Claim B",
+            source_artifact="b",
+            confidence="moderate",
         )
         contradiction = Contradiction(
             contradiction_id="ct1",
@@ -1235,7 +1242,9 @@ class TestEvaluationStoreRoundTrip:
 
         with patch("backend.models.async_session_factory", mock_factory):
             row_id = await EvaluationStore.save_evaluation(
-                "12345678-1234-1234-1234-123456789012", evaluation, iteration=3,
+                "12345678-1234-1234-1234-123456789012",
+                evaluation,
+                iteration=3,
             )
 
         assert row_id is not None
@@ -1297,3 +1306,407 @@ class TestEvaluationStoreRoundTrip:
         assert row.eval_composite == 0.65
         assert row.metrics["is_diminishing"] is True
         assert row.metrics["is_loop_detected"] is False
+
+
+# =====================================================================
+# 15. Engine ↔ Evaluator Integration Tests
+# =====================================================================
+
+
+class TestEngineEvaluatorIntegration:
+    """Test OrchestrationEngine evaluation integration."""
+
+    @pytest.mark.asyncio
+    async def test_maybe_evaluate_iteration_with_flag_off(self):
+        """When use_multi_eval is off, evaluator should NOT be called."""
+        from unittest.mock import patch
+
+        from backend.orchestrator.engine import OrchestrationEngine
+
+        mock_evaluator = AsyncMock()
+        engine = OrchestrationEngine.__new__(OrchestrationEngine)
+        engine._evaluator = mock_evaluator
+        engine._iteration = 3
+        engine._phase = ResearchPhase.EXPLORE
+        engine._board = AsyncMock()
+        engine._project_id = "test-project"
+        engine._last_eval_composite = None
+        engine._last_info_gain = None
+        engine._last_is_diminishing = False
+
+        with patch("backend.config.settings") as mock_cfg:
+            mock_cfg.use_multi_eval = False
+            mock_cfg.eval_interval = 3
+            await engine._maybe_evaluate_iteration([])
+
+        mock_evaluator.evaluate_phase.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_maybe_evaluate_iteration_with_flag_on(self):
+        """When use_multi_eval is on and interval matches, evaluator runs and broadcasts."""
+        from unittest.mock import patch
+
+        from backend.orchestrator.engine import OrchestrationEngine
+
+        mock_evaluator = MagicMock()
+        mock_eval_result = PhaseEvaluation(
+            phase=ResearchPhase.EXPLORE,
+            composite_score=0.72,
+            dimensions={
+                "coverage": DimensionScore(name="coverage", combined=0.8),
+            },
+        )
+        mock_evaluator.evaluate_phase = AsyncMock(return_value=mock_eval_result)
+        mock_evaluator.check_information_gain = MagicMock(
+            return_value=InformationGainMetric(
+                iteration=3,
+                information_gain=0.15,
+                is_diminishing=False,
+            )
+        )
+
+        engine = OrchestrationEngine.__new__(OrchestrationEngine)
+        engine._evaluator = mock_evaluator
+        engine._iteration = 3
+        engine._phase = ResearchPhase.EXPLORE
+        engine._board = AsyncMock()
+        engine._project_id = "test-project"
+        engine._agents = {}
+        engine._lane_index = None
+        engine._raw_ws_broadcast = AsyncMock()
+        engine._last_eval_composite = None
+        engine._last_info_gain = None
+        engine._last_is_diminishing = False
+        # Mock _build_state_summary to avoid dependency on context_builder
+        engine._build_state_summary = AsyncMock(return_value="mock state summary")
+
+        with patch("backend.config.settings") as mock_cfg:
+            mock_cfg.use_multi_eval = True
+            mock_cfg.eval_interval = 3
+            await engine._maybe_evaluate_iteration([])
+
+        mock_evaluator.evaluate_phase.assert_called_once()
+        mock_evaluator.check_information_gain.assert_called_once()
+        assert engine._last_eval_composite == 0.72
+        assert engine._last_info_gain == 0.15
+        assert engine._last_is_diminishing is False
+        # Verify WS broadcast was called with EvaluationCompleted
+        engine._raw_ws_broadcast.assert_called()
+        call_args = engine._raw_ws_broadcast.call_args_list
+        events = [c[0][0] for c in call_args]
+        assert "EvaluationCompleted" in events
+
+    @pytest.mark.asyncio
+    async def test_save_iteration_metric(self):
+        """Verify _save_iteration_metric calls EvaluationStore."""
+        from unittest.mock import patch
+
+        from backend.orchestrator.engine import OrchestrationEngine
+
+        engine = OrchestrationEngine.__new__(OrchestrationEngine)
+        engine._project_id = "test-project"
+        engine._phase = ResearchPhase.EXPLORE
+        engine._iteration = 5
+
+        ig = InformationGainMetric(
+            iteration=5,
+            information_gain=0.1,
+            is_diminishing=False,
+        )
+
+        with patch("backend.evaluation.store.EvaluationStore.save_iteration_metric") as mock_save:
+            mock_save.return_value = AsyncMock()
+            mock_save = AsyncMock()
+            with patch(
+                "backend.evaluation.store.EvaluationStore.save_iteration_metric",
+                mock_save,
+            ):
+                await engine._save_iteration_metric(ig, 0.75)
+
+            mock_save.assert_called_once_with(
+                "test-project",
+                "explore",
+                5,
+                ig,
+                0.75,
+            )
+
+
+# =====================================================================
+# 16. Convergence with Eval Signals Tests
+# =====================================================================
+
+
+class TestConvergenceWithEval:
+    """Test ConvergenceDetector with evaluation signals."""
+
+    @pytest.mark.asyncio
+    async def test_convergence_with_eval_composite(self):
+        """eval_composite participates in convergence when flag is on."""
+        from unittest.mock import patch
+
+        from backend.orchestrator.convergence import ConvergenceDetector
+
+        detector = ConvergenceDetector(min_critic_score=6.0, stable_rounds=1, max_iterations=10)
+
+        board = AsyncMock()
+        board.get_open_challenge_count = AsyncMock(return_value=0)
+        board.get_phase_critic_score = AsyncMock(return_value=8.0)
+        board.get_recent_revision_count = AsyncMock(return_value=0)
+        board.get_phase_iteration_count = AsyncMock(return_value=3)
+        board.list_artifacts = AsyncMock(return_value=[MagicMock()])
+
+        with patch("backend.orchestrator.convergence.settings") as mock_cfg:
+            mock_cfg.use_multi_eval = True
+            mock_cfg.convergence_phase_thresholds = {}
+            mock_cfg.convergence_min_critic_score = 6.0
+            # eval_composite=0.8, threshold for explore=6.0 → 0.6, so 0.8 >= 0.6 → OK
+            signals = await detector.check(
+                board,
+                ResearchPhase.EXPLORE,
+                eval_composite=0.8,
+                information_gain=0.2,
+                is_diminishing=False,
+            )
+
+        assert signals.is_converged is True
+        assert signals.eval_composite == 0.8
+
+    @pytest.mark.asyncio
+    async def test_convergence_ignores_eval_when_flag_off(self):
+        """When use_multi_eval is off, eval signals don't affect convergence."""
+        from unittest.mock import patch
+
+        from backend.orchestrator.convergence import ConvergenceDetector
+
+        detector = ConvergenceDetector(min_critic_score=6.0, stable_rounds=1, max_iterations=10)
+
+        board = AsyncMock()
+        board.get_open_challenge_count = AsyncMock(return_value=0)
+        board.get_phase_critic_score = AsyncMock(return_value=8.0)
+        board.get_recent_revision_count = AsyncMock(return_value=0)
+        board.get_phase_iteration_count = AsyncMock(return_value=3)
+        board.list_artifacts = AsyncMock(return_value=[MagicMock()])
+
+        with patch("backend.orchestrator.convergence.settings") as mock_cfg:
+            mock_cfg.use_multi_eval = False
+            mock_cfg.convergence_phase_thresholds = {}
+            mock_cfg.convergence_min_critic_score = 6.0
+            # Even with low eval_composite, should converge since flag is off
+            signals = await detector.check(
+                board,
+                ResearchPhase.EXPLORE,
+                eval_composite=0.01,
+                is_diminishing=True,
+            )
+
+        assert signals.is_converged is True
+
+    @pytest.mark.asyncio
+    async def test_diminishing_returns_prevents_convergence(self):
+        """is_diminishing blocks convergence early (before half max iterations)."""
+        from unittest.mock import patch
+
+        from backend.orchestrator.convergence import ConvergenceDetector
+
+        detector = ConvergenceDetector(min_critic_score=6.0, stable_rounds=1, max_iterations=10)
+
+        board = AsyncMock()
+        board.get_open_challenge_count = AsyncMock(return_value=0)
+        board.get_phase_critic_score = AsyncMock(return_value=8.0)
+        board.get_recent_revision_count = AsyncMock(return_value=0)
+        board.get_phase_iteration_count = AsyncMock(return_value=2)  # < 10*0.5=5
+        board.list_artifacts = AsyncMock(return_value=[MagicMock()])
+
+        with patch("backend.orchestrator.convergence.settings") as mock_cfg:
+            mock_cfg.use_multi_eval = True
+            mock_cfg.convergence_phase_thresholds = {}
+            mock_cfg.convergence_min_critic_score = 6.0
+            signals = await detector.check(
+                board,
+                ResearchPhase.EXPLORE,
+                eval_composite=0.8,
+                information_gain=0.01,
+                is_diminishing=True,
+            )
+
+        # Should NOT converge: is_diminishing=True and iter_count(2) < max*0.5(5)
+        assert signals.is_converged is False
+
+
+# =====================================================================
+# 17. Evaluation API Tests
+# =====================================================================
+
+
+class TestEvaluationAPI:
+    """Test evaluation API endpoint structure and routing."""
+
+    def test_evaluation_endpoints_exist(self):
+        """Verify all 4 evaluation API endpoints are registered."""
+        from backend.api.projects import router
+
+        paths = [r.path for r in router.routes]
+        assert "/projects/{project_id}/evaluations" in paths
+        assert "/projects/{project_id}/iteration-metrics" in paths
+        assert "/projects/{project_id}/claims" in paths
+        assert "/projects/{project_id}/contradictions" in paths
+
+    def test_evaluation_endpoints_are_get(self):
+        """All evaluation endpoints should be GET methods."""
+        from backend.api.projects import router
+
+        eval_paths = {
+            "/projects/{project_id}/evaluations",
+            "/projects/{project_id}/iteration-metrics",
+            "/projects/{project_id}/claims",
+            "/projects/{project_id}/contradictions",
+        }
+        for route in router.routes:
+            if hasattr(route, "path") and route.path in eval_paths:
+                assert "GET" in route.methods
+
+    def test_convergence_signals_has_eval_fields(self):
+        """ConvergenceSignals should have eval_composite, information_gain, is_diminishing."""
+        from backend.types import ConvergenceSignals
+
+        signals = ConvergenceSignals(
+            eval_composite=0.75,
+            information_gain=0.12,
+            is_diminishing=True,
+        )
+        assert signals.eval_composite == 0.75
+        assert signals.information_gain == 0.12
+        assert signals.is_diminishing is True
+
+    def test_convergence_signals_defaults(self):
+        """New fields should default to None/False for backward compatibility."""
+        from backend.types import ConvergenceSignals
+
+        signals = ConvergenceSignals()
+        assert signals.eval_composite is None
+        assert signals.information_gain is None
+        assert signals.is_diminishing is False
+
+
+# =====================================================================
+# 18. D12 Fix: Operator Precedence in detect_keyword
+# =====================================================================
+
+
+class TestDetectKeywordOperatorPrecedence:
+    """Verify D12 fix: (words_a & words_b) - negation."""
+
+    def test_negation_only_overlap_rejected(self):
+        """Claims sharing only negation words should NOT be detected."""
+        from backend.evaluation.claims import ContradictionDetector
+
+        detector = ContradictionDetector()
+        # Only shared word is "not" → after removing negation, overlap=0
+        claims = [
+            Claim(claim_id="a", text="not alpha", source_artifact="x"),
+            Claim(claim_id="b", text="not beta", source_artifact="y"),
+        ]
+        assert len(detector.detect_keyword(claims)) == 0
+
+    def test_negation_mismatch_with_content_overlap(self):
+        """Claims with 2+ shared content words + negation mismatch → detected."""
+        from backend.evaluation.claims import ContradictionDetector
+
+        detector = ContradictionDetector()
+        claims = [
+            Claim(
+                claim_id="a",
+                text="model performance is not improved",
+                source_artifact="x",
+            ),
+            Claim(
+                claim_id="b",
+                text="model performance is significantly improved",
+                source_artifact="y",
+            ),
+        ]
+        results = detector.detect_keyword(claims)
+        assert len(results) == 1
+        assert results[0].detected_by == "keyword"
+
+
+# =====================================================================
+# 19. D9 Fix: ClaimExtractor Embedding
+# =====================================================================
+
+
+class TestClaimExtractorEmbedding:
+    """Verify D9 fix: ClaimExtractor populates Claim.embedding via embedding service."""
+
+    @pytest.mark.asyncio
+    async def test_extract_with_embedding_service(self):
+        """Claims should have embeddings populated when embedding_service is provided."""
+        from backend.evaluation.claims import ClaimExtractor
+
+        mock_router = AsyncMock()
+        mock_router.generate = AsyncMock(
+            return_value='{"claims": [{"text": "LLMs can reason", "type": "factual", '
+            '"confidence": "strong"}, {"text": "Attention is key", "type": "factual", '
+            '"confidence": "moderate"}]}'
+        )
+
+        mock_embedding = AsyncMock()
+        mock_embedding.embed_batch = AsyncMock(
+            return_value=[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+        )
+
+        extractor = ClaimExtractor(mock_router, embedding_service=mock_embedding)
+        claims = await extractor.extract("Some content", "art-001", "evidence")
+
+        assert len(claims) == 2
+        assert claims[0].embedding == [0.1, 0.2, 0.3]
+        assert claims[1].embedding == [0.4, 0.5, 0.6]
+        mock_embedding.embed_batch.assert_called_once_with(
+            ["LLMs can reason", "Attention is key"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_extract_without_embedding_service(self):
+        """Without embedding service, claims should have empty embedding (backward compat)."""
+        from backend.evaluation.claims import ClaimExtractor
+
+        mock_router = AsyncMock()
+        mock_router.generate = AsyncMock(
+            return_value='{"claims": [{"text": "A claim", "type": "factual"}]}'
+        )
+
+        extractor = ClaimExtractor(mock_router)
+        claims = await extractor.extract("Some content", "art-001")
+
+        assert len(claims) == 1
+        assert claims[0].embedding == []
+
+    @pytest.mark.asyncio
+    async def test_extract_embedding_failure_nonfatal(self):
+        """If embedding fails, claims are still returned (without vectors)."""
+        from backend.evaluation.claims import ClaimExtractor
+
+        mock_router = AsyncMock()
+        mock_router.generate = AsyncMock(
+            return_value='{"claims": [{"text": "A claim", "type": "factual"}]}'
+        )
+
+        mock_embedding = AsyncMock()
+        mock_embedding.embed_batch = AsyncMock(side_effect=RuntimeError("API down"))
+
+        extractor = ClaimExtractor(mock_router, embedding_service=mock_embedding)
+        claims = await extractor.extract("Some content", "art-001")
+
+        assert len(claims) == 1
+        assert claims[0].embedding == []  # Still empty, not crashed
+
+    def test_evaluator_passes_embedding_service(self):
+        """EvaluatorService should pass embedding_service to ClaimExtractor."""
+        from backend.evaluation.evaluator import EvaluatorService
+
+        mock_router = AsyncMock()
+        mock_emb = MagicMock()
+
+        evaluator = EvaluatorService(mock_router, embedding_service=mock_emb)
+        assert evaluator._claim_extractor._embedding_service is mock_emb

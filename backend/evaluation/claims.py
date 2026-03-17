@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from backend.config import settings
 from backend.types import Claim, Contradiction
@@ -44,9 +44,15 @@ _NEGATION_ZH = {"不", "没有", "否", "非", "未", "无"}
 class ClaimExtractor:
     """Extract structured claims from artifact content using LLM."""
 
-    def __init__(self, llm_router: LLMRouter, model: str | None = None) -> None:
+    def __init__(
+        self,
+        llm_router: LLMRouter,
+        model: str | None = None,
+        embedding_service: Any | None = None,
+    ) -> None:
         self._router = llm_router
         self._model = model or settings.eval_claim_extraction_model
+        self._embedding_service = embedding_service
 
     async def extract(
         self,
@@ -55,7 +61,7 @@ class ClaimExtractor:
         artifact_type: str = "",
         model: str | None = None,
     ) -> list[Claim]:
-        """Extract claims from content via LLM."""
+        """Extract claims from content via LLM, then embed each claim."""
         if not content or not content.strip():
             return []
 
@@ -85,7 +91,23 @@ class ClaimExtractor:
                     confidence=raw.get("confidence", "moderate"),
                 )
             )
+
+        # Embed claims if embedding service is available
+        if claims and self._embedding_service:
+            await self._embed_claims(claims)
+
         return claims
+
+    async def _embed_claims(self, claims: list[Claim]) -> None:
+        """Batch-embed claim texts and populate the embedding field."""
+        try:
+            texts = [c.text for c in claims]
+            embeddings = await self._embedding_service.embed_batch(texts)
+            for claim, emb in zip(claims, embeddings):
+                claim.embedding = emb
+            logger.info("[ClaimExtractor] Embedded %d claims", len(claims))
+        except Exception:
+            logger.warning("[ClaimExtractor] Embedding failed, claims have no vectors")
 
 
 class ContradictionDetector:
@@ -107,7 +129,7 @@ class ContradictionDetector:
                 words_b = set(b.text.lower().split())
 
                 # Need enough content overlap to be discussing the same thing
-                overlap = words_a & words_b - all_negation
+                overlap = (words_a & words_b) - all_negation
                 if len(overlap) < 2:
                     continue
 

@@ -247,6 +247,14 @@ async def _create_engine(
         except Exception:
             logger.warning("Failed to update DB phase for project %s", project_id)
 
+    evaluator = None
+    if settings.use_multi_eval:
+        from backend.evaluation.evaluator import EvaluatorService
+
+        evaluator = EvaluatorService(
+            llm_router, project_id=str(project_id), embedding_service=embedding_service,
+        )
+
     engine = OrchestrationEngine(
         project_id=project_id,
         board=board,
@@ -262,6 +270,7 @@ async def _create_engine(
         token_tracker=token_tracker,
         lane_index=lane_index,
         embedding_service=embedding_service,
+        evaluator=evaluator,
     )
 
     subagent_pool = SubAgentPool(llm_router)

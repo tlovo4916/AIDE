@@ -49,7 +49,9 @@ class Board(Protocol):
     async def get_recent_revision_count(self, rounds: int) -> int: ...
     async def get_phase_iteration_count(self, phase: ResearchPhase) -> int: ...
     async def list_artifacts(
-        self, artifact_type: ArtifactType, include_superseded: bool = False,
+        self,
+        artifact_type: ArtifactType,
+        include_superseded: bool = False,
     ) -> list[Any]: ...
 
 
@@ -91,7 +93,14 @@ class ConvergenceDetector:
             return float(override)
         return _PHASE_SCORE_THRESHOLDS.get(phase, self._min_critic_score)
 
-    async def check(self, board: Board, phase: ResearchPhase) -> ConvergenceSignals:
+    async def check(
+        self,
+        board: Board,
+        phase: ResearchPhase,
+        eval_composite: float | None = None,
+        information_gain: float | None = None,
+        is_diminishing: bool = False,
+    ) -> ConvergenceSignals:
         open_challenges = await board.get_open_challenge_count()
         critic_score = await board.get_phase_critic_score(phase)
         revision_count = await board.get_recent_revision_count(self._stable_rounds)
@@ -106,6 +115,9 @@ class ConvergenceDetector:
                 critic_score=critic_score,
                 recent_revision_count=revision_count,
                 iteration_count=iteration_count,
+                eval_composite=eval_composite,
+                information_gain=information_gain,
+                is_diminishing=is_diminishing,
             ),
             phase,
             coverage_ok,
@@ -117,6 +129,9 @@ class ConvergenceDetector:
             recent_revision_count=revision_count,
             iteration_count=iteration_count,
             is_converged=converged,
+            eval_composite=eval_composite,
+            information_gain=information_gain,
+            is_diminishing=is_diminishing,
         )
 
     async def _check_artifact_coverage(self, board: Board, phase: ResearchPhase) -> bool:
@@ -129,7 +144,8 @@ class ConvergenceDetector:
             if not artifacts:
                 logger.debug(
                     "[Convergence] Missing required artifact type %s for phase %s",
-                    art_type.value, phase.value,
+                    art_type.value,
+                    phase.value,
                 )
                 return False
         return True
@@ -148,9 +164,28 @@ class ConvergenceDetector:
         no_open = signals.open_challenges == 0
         score_ok = signals.critic_score >= threshold
 
+        # Evaluation-enhanced convergence (feature-flagged)
+        eval_ok = True
+        if settings.use_multi_eval and signals.eval_composite is not None:
+            # Normalized threshold: phase threshold is on 0-10 scale, eval on 0-1
+            eval_threshold = threshold * 0.1
+            eval_score_ok = signals.eval_composite >= eval_threshold
+            # Allow convergence with diminishing returns only after half max iterations
+            diminishing_ok = (
+                not signals.is_diminishing or signals.iteration_count >= self._max_iterations * 0.5
+            )
+            eval_ok = eval_score_ok and diminishing_ok
+            logger.info(
+                "[Convergence] eval_composite=%.3f (need >= %.3f) is_diminishing=%s eval_ok=%s",
+                signals.eval_composite,
+                eval_threshold,
+                signals.is_diminishing,
+                eval_ok,
+            )
+
         logger.info(
             "[Convergence] phase=%s iter=%d open_challenges=%d critic_score=%.1f "
-            "(need >= %.1f) coverage=%s -> no_open=%s score_ok=%s",
+            "(need >= %.1f) coverage=%s -> no_open=%s score_ok=%s eval_ok=%s",
             phase.value,
             signals.iteration_count,
             signals.open_challenges,
@@ -159,9 +194,10 @@ class ConvergenceDetector:
             coverage_ok,
             no_open,
             score_ok,
+            eval_ok,
         )
 
-        return no_open and score_ok and coverage_ok
+        return no_open and score_ok and coverage_ok and eval_ok
 
     # Keep old method name for backward compatibility
     def is_phase_converged(self, signals: ConvergenceSignals) -> bool:

@@ -128,6 +128,7 @@ class Settings(BaseSettings):
     eval_info_gain_window: int = 5
     eval_info_gain_threshold: float = 0.05
     eval_loop_jaccard_threshold: float = 0.8
+    eval_interval: int = 3
 
     # -- Migration --
     migrate_on_start: bool = False

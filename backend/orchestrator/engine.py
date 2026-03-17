@@ -129,6 +129,7 @@ class OrchestrationEngine:
         token_tracker: TokenTracker | None = None,
         lane_index: int | None = None,
         embedding_service: Any | None = None,
+        evaluator: Any | None = None,
     ) -> None:
         self._project_id = project_id
         self._board = board
@@ -146,6 +147,8 @@ class OrchestrationEngine:
         self._lane_index = lane_index
         self._embedding_service = embedding_service
 
+        self._evaluator = evaluator
+
         self._running = False
         self._phase = ResearchPhase.EXPLORE
         self._iteration = 0
@@ -153,6 +156,11 @@ class OrchestrationEngine:
         self._skip_synthesize = True  # single-lane: COMPOSE→COMPLETE directly
         self._topic_embedding: list[float] | None = None
         self._topic_drift_detected = False  # set by _check_on_topic, read by _dispatch_agent
+
+        # Last evaluation results (passed to convergence detector)
+        self._last_eval_composite: float | None = None
+        self._last_info_gain: float | None = None
+        self._last_is_diminishing: bool = False
 
     async def _ws_broadcast(self, event: str, payload: dict[str, Any]) -> None:
         """Broadcast a WS event, automatically injecting lane_index if set."""
@@ -386,20 +394,25 @@ class OrchestrationEngine:
                         try:
                             ks = await self._board.compute_coverage()
                             if ks and ks.gap_descriptions:
-                                await self._board.update_meta(
-                                    "coverage_gaps", ks.gap_descriptions
-                                )
+                                await self._board.update_meta("coverage_gaps", ks.gap_descriptions)
                         except Exception:
-                            logger.warning(
-                                "[Engine] Coverage computation failed (non-fatal)"
-                            )
+                            logger.warning("[Engine] Coverage computation failed (non-fatal)")
+
+                # 7d. Per-iteration evaluation (feature-flagged)
+                await self._maybe_evaluate_iteration(artifact_updates)
 
                 # 8. Handle challenges
                 await self._handle_challenges(self._board)
 
                 # 9. Convergence check
                 await self._board.increment_phase_iteration(self._phase)
-                signals = await self._convergence.check(self._board, self._phase)
+                signals = await self._convergence.check(
+                    self._board,
+                    self._phase,
+                    eval_composite=self._last_eval_composite,
+                    information_gain=self._last_info_gain,
+                    is_diminishing=self._last_is_diminishing,
+                )
 
                 backtrack_to = await self._backtrack.should_backtrack(
                     self._board, self._phase, signals
@@ -778,6 +791,26 @@ class OrchestrationEngine:
     # ------------------------------------------------------------------
 
     async def _advance_phase(self, board: Board, current_phase: ResearchPhase) -> ResearchPhase:
+        # Phase boundary evaluation (feature-flagged)
+        from backend.config import settings as cfg
+
+        if self._evaluator and cfg.use_multi_eval:
+            try:
+                evaluation = await self._evaluator.evaluate_phase(board, current_phase)
+                contradictions = await self._evaluator.evaluate_contradictions(board)
+                # Persist phase boundary evaluation to DB
+                await self._evaluator.save_to_db(evaluation, self._iteration)
+                await self._ws_broadcast(
+                    "PhaseEvaluationCompleted",
+                    {
+                        "phase": current_phase.value,
+                        "composite_score": round(evaluation.composite_score, 3),
+                        "contradictions": len(contradictions),
+                    },
+                )
+            except Exception:
+                logger.exception("[Engine] Phase boundary evaluation failed")
+
         next_phase = self._convergence.suggest_next_phase(current_phase)
         # Single-lane engines skip SYNTHESIZE (goes COMPOSE → COMPLETE directly)
         if next_phase == ResearchPhase.SYNTHESIZE and self._skip_synthesize:
@@ -799,6 +832,67 @@ class OrchestrationEngine:
         if self._on_phase_change:
             await self._on_phase_change(next_phase.value)
         return next_phase
+
+    async def _maybe_evaluate_iteration(self, artifact_updates: list[dict]) -> None:
+        """Run per-iteration evaluation if feature flag is on and interval matches."""
+        from backend.config import settings as cfg
+
+        if not self._evaluator or not cfg.use_multi_eval:
+            return
+        if self._iteration < 1 or cfg.eval_interval < 1:
+            return
+        if self._iteration % cfg.eval_interval != 0:
+            return
+
+        try:
+            evaluation = await self._evaluator.evaluate_phase(self._board, self._phase)
+            # Compute information gain
+            summary = await self._build_state_summary(self._board, role=None)
+            ig_metric = self._evaluator.check_information_gain(summary)
+
+            # Cache for convergence detector
+            self._last_eval_composite = evaluation.composite_score
+            self._last_info_gain = ig_metric.information_gain
+            self._last_is_diminishing = ig_metric.is_diminishing
+
+            # Save iteration metric to DB
+            await self._save_iteration_metric(ig_metric, evaluation.composite_score)
+
+            # Broadcast evaluation results
+            await self._ws_broadcast(
+                "EvaluationCompleted",
+                {
+                    "phase": self._phase.value,
+                    "iteration": self._iteration,
+                    "composite_score": round(evaluation.composite_score, 3),
+                    "information_gain": round(ig_metric.information_gain, 3),
+                    "is_diminishing": ig_metric.is_diminishing,
+                    "dimensions": {
+                        k: round(v.combined, 3) for k, v in evaluation.dimensions.items()
+                    },
+                },
+            )
+        except Exception:
+            logger.exception("[Engine] Evaluation failed (non-fatal)")
+
+    async def _save_iteration_metric(
+        self,
+        ig: Any,
+        composite: float,
+    ) -> None:
+        """Persist iteration metric to DB (non-fatal on failure)."""
+        try:
+            from backend.evaluation.store import EvaluationStore
+
+            await EvaluationStore.save_iteration_metric(
+                self._project_id,
+                self._phase.value,
+                self._iteration,
+                ig,
+                composite,
+            )
+        except Exception:
+            logger.exception("[Engine] Failed to save iteration metric (non-fatal)")
 
     async def _check_on_topic(self, summary: str) -> None:
         """Warn via WS if the state summary appears to be off the research topic.

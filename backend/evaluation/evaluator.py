@@ -152,9 +152,12 @@ class EvaluatorService:
         contradiction_detector: ContradictionDetector | None = None,
         info_gain: InformationGainDetector | None = None,
         project_id: str | None = None,
+        embedding_service: object | None = None,
     ) -> None:
         self._router = llm_router
-        self._claim_extractor = claim_extractor or ClaimExtractor(llm_router)
+        self._claim_extractor = claim_extractor or ClaimExtractor(
+            llm_router, embedding_service=embedding_service,
+        )
         self._contradiction_detector = contradiction_detector or ContradictionDetector(llm_router)
         self._info_gain = info_gain or InformationGainDetector()
         self._project_id = project_id

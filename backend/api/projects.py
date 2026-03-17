@@ -231,11 +231,13 @@ async def get_lane_statuses(project_id: uuid.UUID) -> list[dict]:
                 iteration = phase_iters.get(phase, meta.get("iteration", 0))
             except Exception:
                 pass
-        result.append({
-            "lane": int(lane_dir.name),
-            "phase": phase,
-            "iteration": iteration,
-        })
+        result.append(
+            {
+                "lane": int(lane_dir.name),
+                "phase": phase,
+                "iteration": iteration,
+            }
+        )
     return result
 
 
@@ -359,10 +361,7 @@ async def get_citation_graph(
                 data["url"] = f"https://www.semanticscholar.org/paper/{node_id}"
         nodes.append(data)
 
-    edges = [
-        {"source": u, "target": v}
-        for u, v in graph.graph.edges()
-    ]
+    edges = [{"source": u, "target": v} for u, v in graph.graph.edges()]
 
     most_cited = graph.get_most_cited(5) if nodes else []
 
@@ -548,6 +547,166 @@ def _markdown_to_html(md_content: str, title: str) -> str:
         f"<style>\n{css}\n</style>\n"
         f"</head>\n<body>\n{body}\n</body>\n</html>"
     )
+
+
+@router.get("/{project_id}/evaluations")
+async def get_evaluations(
+    project_id: uuid.UUID,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    """Return evaluation results for a project (paginated)."""
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    from backend.models.evaluation import EvaluationResult
+
+    stmt = (
+        select(EvaluationResult)
+        .where(EvaluationResult.project_id == project_id)
+        .order_by(EvaluationResult.created_at)
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    rows = result.scalars().all()
+
+    return [
+        {
+            "id": str(r.id),
+            "phase": r.phase,
+            "iteration": r.iteration,
+            "composite_score": r.composite_score,
+            "evaluator_model": r.evaluator_model,
+            "dimensions": r.dimensions,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/{project_id}/iteration-metrics")
+async def get_iteration_metrics(
+    project_id: uuid.UUID,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    """Return iteration metrics for a project (paginated)."""
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    from backend.models.iteration_metric import IterationMetric
+
+    stmt = (
+        select(IterationMetric)
+        .where(IterationMetric.project_id == project_id)
+        .order_by(IterationMetric.created_at)
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    rows = result.scalars().all()
+
+    return [
+        {
+            "id": str(r.id),
+            "phase": r.phase,
+            "iteration": r.iteration,
+            "information_gain": r.information_gain,
+            "eval_composite": r.eval_composite,
+            "artifact_count_delta": r.artifact_count_delta,
+            "unique_claim_delta": r.unique_claim_delta,
+            "metrics": r.metrics,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/{project_id}/claims")
+async def get_claims(
+    project_id: uuid.UUID,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    """Return claims for a project (paginated)."""
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    from backend.models.claim import Claim as ClaimORM
+
+    stmt = (
+        select(ClaimORM)
+        .where(ClaimORM.project_id == project_id)
+        .order_by(ClaimORM.created_at)
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    rows = result.scalars().all()
+
+    # Reverse-map confidence float → string
+    _conf_rev = {1.0: "strong", 0.7: "moderate", 0.4: "tentative"}
+    return [
+        {
+            "claim_id": str(r.id),
+            "text": r.text,
+            "source_artifact": r.source_agent or "",
+            "confidence": _conf_rev.get(r.confidence, "moderate"),
+        }
+        for r in rows
+    ]
+
+
+@router.get("/{project_id}/contradictions")
+async def get_contradictions(
+    project_id: uuid.UUID,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    """Return contradictions for a project (paginated)."""
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    from backend.models.claim import Contradiction as ContradictionORM
+
+    stmt = (
+        select(ContradictionORM)
+        .where(ContradictionORM.project_id == project_id)
+        .order_by(ContradictionORM.created_at)
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    rows = result.scalars().all()
+
+    items: list[dict] = []
+    for r in rows:
+        evidence_data: dict = {}
+        if r.evidence:
+            try:
+                evidence_data = json.loads(r.evidence)
+            except (json.JSONDecodeError, TypeError):
+                evidence_data = {"raw": r.evidence}
+        items.append(
+            {
+                "id": str(r.id),
+                "claim_a_id": str(r.claim_a_id),
+                "claim_b_id": str(r.claim_b_id),
+                "confidence": r.confidence,
+                "evidence": evidence_data,
+                "status": r.status,
+            }
+        )
+    return items
 
 
 def _escape_html(text: str) -> str:

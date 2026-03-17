@@ -171,6 +171,9 @@ class ConvergenceSignals(BaseModel):
     recent_revision_count: int = 0
     iteration_count: int = 0
     is_converged: bool = False
+    eval_composite: float | None = None
+    information_gain: float | None = None
+    is_diminishing: bool = False
 
 
 # ---------------------------------------------------------------------------
