@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from backend.types import AgentRole, ChallengeRecord, ChallengeStatus
@@ -44,7 +44,7 @@ class ChallengeManager:
         rec.status = ChallengeStatus.RESOLVED
         rec.responder = responder
         rec.response = response
-        rec.resolved_at = datetime.utcnow()
+        rec.resolved_at = datetime.now(UTC)
         await board.write_challenge(rec)
         return rec
 
@@ -59,7 +59,7 @@ class ChallengeManager:
             raise ValueError(f"Challenge {challenge_id} not found")
         rec.status = ChallengeStatus.DISMISSED
         rec.response = reason
-        rec.resolved_at = datetime.utcnow()
+        rec.resolved_at = datetime.now(UTC)
         await board.write_challenge(rec)
         return rec
 

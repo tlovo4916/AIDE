@@ -68,15 +68,6 @@ action_type values:
 
 **IMPORTANT**: EVERY write_artifact action MUST include `"artifact_type"` in `content`, set to one of: `"hypotheses"`, `"evidence_gaps"`, `"experiment_guide"`. Never omit this field.
 
-{% if research_topic %}
-## ⚠️ RESEARCH TOPIC — THIS IS YOUR SOLE FOCUS
-
-**{{ research_topic }}**
-
-Every hypothesis, methodology, and analysis you produce MUST directly relate to the above research topic.
-If you notice any previous work has drifted off-topic, explicitly correct it and redirect to this topic.
-
-{% endif %}
 {% if trend_signals %}
 ## Trend Signals
 

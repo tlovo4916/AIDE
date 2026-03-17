@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from backend.types import (
@@ -147,8 +147,7 @@ class ActionExecutor:
         if allowed and artifact_type not in allowed:
             corrected = role_default.get(action.agent_role, artifact_type)
             logger.warning(
-                "_exec_write_artifact: %s tried to write %r, corrected to %r"
-                " (not in allowed: %s)",
+                "_exec_write_artifact: %s tried to write %r, corrected to %r (not in allowed: %s)",
                 action.agent_role.value,
                 artifact_type.value,
                 corrected.value,
@@ -263,7 +262,7 @@ class ActionExecutor:
         existing.status = ChallengeStatus.RESOLVED
         existing.responder = action.agent_role
         existing.response = c.get("response", "")
-        existing.resolved_at = datetime.utcnow()
+        existing.resolved_at = datetime.now(UTC)
         await board.write_challenge(existing)
 
     @staticmethod

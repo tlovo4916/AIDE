@@ -45,14 +45,6 @@ Respond with a **valid JSON object** using this structure:
     "reasoning_summary": "<how you integrated multiple lanes>"
 }
 
-{% if research_topic %}
-## ⚠️ RESEARCH TOPIC — THIS IS YOUR SOLE FOCUS
-
-**{{ research_topic }}**
-
-The unified paper MUST be about the above research topic and nothing else.
-
-{% endif %}
 ## Language Requirement
 
 **IMPORTANT**: All content values you write MUST be in **Simplified Chinese (简体中文)**. JSON keys and technical field names remain in English. This includes: `text`, `rationale`, `reasoning_summary`, `consensus`, `divergences`, and any other free-text value fields.

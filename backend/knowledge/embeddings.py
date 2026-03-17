@@ -18,8 +18,8 @@ _MODEL_MAP: dict[str, str] = {
     "text-embedding-ada-002": "openai/text-embedding-ada-002",
 }
 
-# Default model (OpenRouter full ID)
-_DEFAULT_MODEL = "openai/text-embedding-3-small"
+# Default model — aligned with config.py embedding_model
+_DEFAULT_MODEL = "qwen/qwen3-embedding-8b"
 
 
 class EmbeddingService:

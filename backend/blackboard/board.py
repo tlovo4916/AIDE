@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -69,7 +69,7 @@ class Blackboard:
             (self._root / "artifacts" / at.value).mkdir(parents=True, exist_ok=True)
         if not self._meta_path.exists():
             meta = {
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
                 "phase": "explore",
                 "research_topic": research_topic,
             }
@@ -203,7 +203,7 @@ class Blackboard:
         if data is None:
             return
         data.update(kwargs)
-        data["updated_at"] = datetime.utcnow().isoformat()
+        data["updated_at"] = datetime.now(UTC).isoformat()
         await self._write_json(path, data)
         # Sync cache
         cache_key = artifact_type.value
@@ -313,7 +313,7 @@ class Blackboard:
             return
         existing.status = status
         existing.response = resolution
-        existing.resolved_at = datetime.utcnow()
+        existing.resolved_at = datetime.now(UTC)
         await self.write_challenge(existing)
 
     async def write_challenge(self, challenge: ChallengeRecord) -> None:
@@ -387,7 +387,7 @@ class Blackboard:
     async def update_project_meta(self, **kwargs: Any) -> None:
         meta = await self.get_project_meta()
         meta.update(kwargs)
-        meta["updated_at"] = datetime.utcnow().isoformat()
+        meta["updated_at"] = datetime.now(UTC).isoformat()
         await self._write_json(self._meta_path, meta)
         self._meta_cache = meta
 
@@ -514,7 +514,10 @@ class Blackboard:
         return ""
 
     async def _is_duplicate(
-        self, art_type: ArtifactType, new_text: str, threshold: float = 0.6,
+        self,
+        art_type: ArtifactType,
+        new_text: str,
+        threshold: float = 0.6,
     ) -> bool:
         """Check if new_text is too similar to any existing artifact of the same type."""
         existing = await self.list_artifacts(art_type)
@@ -607,7 +610,11 @@ class Blackboard:
         )
         logger.info(
             "[Board] Phase %s critic score: %.1f → EMA %.2f (α=%.1f, n=%d)",
-            phase.value, score, new_ema, ema_alpha, old_count + 1,
+            phase.value,
+            score,
+            new_ema,
+            ema_alpha,
+            old_count + 1,
         )
 
     async def get_recent_revision_count(self, rounds: int) -> int:
@@ -653,7 +660,7 @@ class Blackboard:
         await self.update_project_meta(**{key: value})
 
     async def has_contradictory_evidence(self) -> bool:
-        keywords =("contradict", "矛盾", "冲突", "不一致", "相悖", "反驳")
+        keywords = ("contradict", "矛盾", "冲突", "不一致", "相悖", "反驳")
         challenges = await self.list_challenges()
         for ch in challenges:
             if ch.status == ChallengeStatus.OPEN:
@@ -663,7 +670,7 @@ class Blackboard:
         return False
 
     async def has_logic_gaps(self) -> bool:
-        keywords =("gap", "logic", "漏洞", "逻辑", "缺失", "不完整", "推理")
+        keywords = ("gap", "logic", "漏洞", "逻辑", "缺失", "不完整", "推理")
         challenges = await self.list_challenges()
         for ch in challenges:
             if ch.status == ChallengeStatus.OPEN:
@@ -673,7 +680,7 @@ class Blackboard:
         return False
 
     async def has_direction_issues(self) -> bool:
-        keywords =("direction", "方向", "偏离", "偏题", "跑偏", "离题")
+        keywords = ("direction", "方向", "偏离", "偏题", "跑偏", "离题")
         challenges = await self.list_challenges()
         for ch in challenges:
             if ch.status == ChallengeStatus.OPEN:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -94,7 +94,7 @@ class TokenTracker:
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "cost": cost,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         self._memory_log.append(record)
 
@@ -155,8 +155,8 @@ class TokenTracker:
                             "prompt_tokens": int(row.total_prompt or 0),
                             "completion_tokens": int(row.total_completion or 0),
                             "total_tokens": int(
-                            (row.total_prompt or 0) + (row.total_completion or 0)
-                        ),
+                                (row.total_prompt or 0) + (row.total_completion or 0)
+                            ),
                             "cost_usd": round(float(row.total_cost or 0.0), 6),
                             "calls": int(row.call_count),
                         }

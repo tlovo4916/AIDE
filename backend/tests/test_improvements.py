@@ -359,7 +359,8 @@ class TestDynamicPlanner:
             assert d.agent_to_invoke == AgentRole.DIRECTOR
 
     @pytest.mark.asyncio
-    async def test_research_topic_in_task_description(self, mock_router):
+    async def test_research_topic_not_injected_in_task_description(self, mock_router):
+        """Topic injection removed from planner (Layer 3). Topic is now in board context only."""
         from backend.orchestrator.planner import OrchestratorPlanner
 
         with patch("backend.orchestrator.planner.settings") as mock_settings:
@@ -367,7 +368,7 @@ class TestDynamicPlanner:
             mock_settings.orchestrator_model = "deepseek-chat"
             planner = OrchestratorPlanner(mock_router, research_topic="quantum computing")
             d = await planner.plan_next_action("state", ResearchPhase.EXPLORE, 1)
-            assert "quantum computing" in d.task_description
+            assert "[RESEARCH TOPIC]" not in d.task_description
 
 
 # =====================================================================

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Protocol, runtime_checkable
 
+from backend.agents.base import LLMRouter
 from backend.config import settings
 from backend.types import (
     AgentRole,
@@ -156,9 +156,7 @@ _PHASE_TASKS: dict[ResearchPhase, dict[AgentRole, str]] = {
             " paper. Assign an overall score (1-10) and"
             " identify any remaining issues."
         ),
-        AgentRole.WRITER: (
-            "Address final reviewer comments and polish the paper for submission."
-        ),
+        AgentRole.WRITER: ("Address final reviewer comments and polish the paper for submission."),
     },
     ResearchPhase.SYNTHESIZE: {
         AgentRole.SYNTHESIZER: (
@@ -210,18 +208,6 @@ _PLANNER_SYSTEM_PROMPT = (
 _CRITIC_GUARANTEE_INTERVAL = 3
 
 
-@runtime_checkable
-class LLMRouter(Protocol):
-    async def generate(
-        self,
-        model: str,
-        prompt: str,
-        *,
-        system_prompt: str | None = None,
-        json_mode: bool = False,
-    ) -> str: ...
-
-
 class OrchestratorPlanner:
     """Hybrid planner: LLM-based dynamic scheduling with rule-based fallback.
 
@@ -267,27 +253,34 @@ class OrchestratorPlanner:
 
         if force_critic:
             agent = AgentRole.CRITIC
-            rationale = (
-                f"Critic guarantee: {iteration - last_critic} iterations since last critic"
-            )
+            rationale = f"Critic guarantee: {iteration - last_critic} iterations since last critic"
             logger.info(
                 "[Planner] Forcing CRITIC (last at iter %d, now %d)",
-                last_critic, iteration,
+                last_critic,
+                iteration,
             )
         elif settings.enable_llm_planner:
             # Try LLM-based selection
             agent, rationale = await self._llm_select(
-                board_state_summary, phase, iteration, valid_agents,
-                open_challenges, missing_artifact_types,
+                board_state_summary,
+                phase,
+                iteration,
+                valid_agents,
+                open_challenges,
+                missing_artifact_types,
             )
             if agent is None:
                 # Fallback to rule-based
                 agent, rationale = self._rule_select(
-                    phase, iteration, missing_artifact_types,
+                    phase,
+                    iteration,
+                    missing_artifact_types,
                 )
         else:
             agent, rationale = self._rule_select(
-                phase, iteration, missing_artifact_types,
+                phase,
+                iteration,
+                missing_artifact_types,
             )
 
         # Track critic invocations
@@ -302,12 +295,13 @@ class OrchestratorPlanner:
                 if target and target in valid_agents and target != agent:
                     logger.info(
                         "[Planner] Overriding %s → %s due to open challenge %s",
-                        agent.value, target.value, ch.challenge_id,
+                        agent.value,
+                        target.value,
+                        ch.challenge_id,
                     )
                     agent = target
                     rationale = (
-                        f"Challenge routing: challenge {ch.challenge_id}"
-                        f" targets {target.value}"
+                        f"Challenge routing: challenge {ch.challenge_id} targets {target.value}"
                     )
                     break
 
@@ -315,20 +309,10 @@ class OrchestratorPlanner:
         task_map = _PHASE_TASKS.get(phase, {})
         base_task = task_map.get(agent, f"Perform your role duties for the {phase.value} phase.")
 
-        if self._research_topic:
-            task_desc = (
-                f"[RESEARCH TOPIC]: {self._research_topic}\n\n"
-                f"ALL your work MUST focus strictly on the above research topic.\n\n"
-                f"{base_task}"
-            )
-        else:
-            task_desc = base_task
+        task_desc = base_task
 
         if self._lane_perspective:
-            task_desc = (
-                f"[RESEARCH PERSPECTIVE]: {self._lane_perspective}\n\n"
-                f"{task_desc}"
-            )
+            task_desc = f"[RESEARCH PERSPECTIVE]: {self._lane_perspective}\n\n{task_desc}"
 
         if missing_artifact_types:
             missing_lines = []
@@ -352,7 +336,10 @@ class OrchestratorPlanner:
 
         logger.info(
             "[Planner] phase=%s iter=%d → agent=%s (%s)",
-            phase.value, iteration, agent.value, rationale[:80],
+            phase.value,
+            iteration,
+            agent.value,
+            rationale[:80],
         )
 
         return OrchestratorDecision(
@@ -406,9 +393,7 @@ class OrchestratorPlanner:
         if hist:
             hist_lines = [f"  iter {it}: {ag}" for it, ag in hist]
             history_info = (
-                "\n最近调度历史 (避免连续重复同一 Agent):\n"
-                + "\n".join(hist_lines)
-                + "\n"
+                "\n最近调度历史 (避免连续重复同一 Agent):\n" + "\n".join(hist_lines) + "\n"
             )
 
         prompt = (
@@ -442,7 +427,8 @@ class OrchestratorPlanner:
             if agent not in valid_agents:
                 logger.warning(
                     "[Planner] LLM chose %s but not in valid set %s",
-                    agent.value, [a.value for a in valid_agents],
+                    agent.value,
+                    [a.value for a in valid_agents],
                 )
                 return None, ""
 
@@ -468,17 +454,12 @@ class OrchestratorPlanner:
         sequence = _PHASE_SEQUENCES.get(phase, [AgentRole.CRITIC])
         agent = sequence[(iteration - 1) % len(sequence)]
         rationale = (
-            f"Rule-based sequence: {phase.value}"
-            f"[{(iteration - 1) % len(sequence)}]"
-            f"={agent.value}"
+            f"Rule-based sequence: {phase.value}[{(iteration - 1) % len(sequence)}]={agent.value}"
         )
 
         if missing_artifact_types:
             # Check if current agent can produce any missing artifact
-            can_produce = any(
-                _ARTIFACT_PRODUCER.get(at) == agent
-                for at in missing_artifact_types
-            )
+            can_produce = any(_ARTIFACT_PRODUCER.get(at) == agent for at in missing_artifact_types)
             if not can_produce:
                 # Override to the agent that produces the first missing artifact
                 for at in missing_artifact_types:
@@ -486,12 +467,11 @@ class OrchestratorPlanner:
                     if producer and producer in set(sequence):
                         logger.info(
                             "[Planner] Coverage override: %s → %s for missing %s",
-                            agent.value, producer.value, at.value,
+                            agent.value,
+                            producer.value,
+                            at.value,
                         )
-                        rationale = (
-                            f"Coverage override: {at.value} missing, "
-                            f"need {producer.value}"
-                        )
+                        rationale = f"Coverage override: {at.value} missing, need {producer.value}"
                         agent = producer
                         break
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -42,7 +42,7 @@ class HeartbeatMonitor:
         if project_id in self._tasks:
             logger.warning("Heartbeat already running for project %s", project_id)
             return
-        self._last_activity[project_id] = datetime.utcnow()
+        self._last_activity[project_id] = datetime.now(UTC)
         self._consecutive_failures[project_id] = 0
         task = asyncio.create_task(self._loop(project_id, board))
         self._tasks[project_id] = task
@@ -74,7 +74,7 @@ class HeartbeatMonitor:
         }
 
     def record_activity(self, project_id: str) -> None:
-        self._last_activity[project_id] = datetime.utcnow()
+        self._last_activity[project_id] = datetime.now(UTC)
         self._consecutive_failures[project_id] = 0
 
     def record_agent_status(self, role: str, status: str) -> None:
@@ -99,7 +99,7 @@ class HeartbeatMonitor:
         snapshot_path.write_text(
             json.dumps(
                 {
-                    "snapshot_at": datetime.utcnow().isoformat(),
+                    "snapshot_at": datetime.now(UTC).isoformat(),
                     "state": state,
                 },
                 ensure_ascii=False,
@@ -146,7 +146,7 @@ class HeartbeatMonitor:
     def _detect_issues(self, project_id: str) -> None:
         last = self._last_activity.get(project_id)
         if last:
-            elapsed = (datetime.utcnow() - last).total_seconds()
+            elapsed = (datetime.now(UTC) - last).total_seconds()
             if elapsed > self._stale_threshold:
                 logger.warning(
                     "Stale state for %s: no activity for %.0fs",

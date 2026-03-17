@@ -1,0 +1,50 @@
+{
+  "task_id": "evidence_mapping",
+  "research_topic": "Federated learning privacy mechanisms",
+  "phase": "evidence",
+  "description": "Test evidence mapping and citation density evaluation with mixed-language artifacts",
+  "input_artifacts": [
+    {
+      "artifact_type": "evidence_findings",
+      "artifact_id": "ev-001",
+      "created_by": "scientist",
+      "content": "Differential privacy in federated learning adds calibrated noise to gradient updates. McMahan et al. (2017) demonstrated that the privacy budget epsilon can be controlled by adjusting clipping bounds and noise multiplier. Reference: https://arxiv.org/abs/1710.06963 [1]"
+    },
+    {
+      "artifact_type": "evidence_findings",
+      "artifact_id": "ev-002",
+      "created_by": "scientist",
+      "content": "Secure aggregation protocols enable servers to compute aggregate model updates without seeing individual contributions. Bonawitz et al. (2017) showed this adds only 2x communication overhead. Reference: https://dl.acm.org/doi/10.1145/3133956.3133982 [2]"
+    },
+    {
+      "artifact_type": "evidence_findings",
+      "artifact_id": "ev-003",
+      "created_by": "librarian",
+      "content": "Homomorphic encryption allows computation on encrypted gradients but introduces 100-1000x computational overhead. CKKS scheme reduces this for approximate computations. Reference: doi:10.1007/978-3-319-70694-8_15 [3]"
+    },
+    {
+      "artifact_type": "evidence_findings",
+      "artifact_id": "ev-004",
+      "created_by": "librarian",
+      "content": "Recent work on gradient compression and sparsification can reduce communication costs by 99% while maintaining model convergence. Top-k sparsification with error feedback is the most effective approach (Alistarh et al., 2018). Reference: https://arxiv.org/abs/1802.04434 [4]"
+    },
+    {
+      "artifact_type": "hypotheses",
+      "artifact_id": "hyp-001",
+      "created_by": "scientist",
+      "content": "Combining differential privacy with secure aggregation provides stronger privacy guarantees than either mechanism alone, with manageable overhead trade-offs when privacy budget epsilon > 1.0."
+    },
+    {
+      "artifact_type": "hypotheses",
+      "artifact_id": "hyp-002",
+      "created_by": "scientist",
+      "content": "Gradient compression techniques are complementary to privacy mechanisms and can offset the communication overhead introduced by secure aggregation."
+    }
+  ],
+  "expected_evaluation": {
+    "citation_density": [0.3, 0.9],
+    "source_diversity": [0.4, 1.0]
+  },
+  "expected_contradictions": [],
+  "expected_convergence": null
+}

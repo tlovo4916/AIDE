@@ -69,12 +69,10 @@ class BaseAgent(ABC):
         self,
         llm_router: LLMRouter,
         write_back_guard: WriteBackGuard,
-        research_topic: str = "",
         project_id: str = "",
     ) -> None:
         self._llm_router = llm_router
         self._write_back_guard = write_back_guard
-        self._research_topic = research_topic
         self._project_id = project_id
         self._jinja_env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(str(_PROMPTS_DIR)),
@@ -135,7 +133,8 @@ class BaseAgent(ABC):
             if extra_actions:
                 logger.info(
                     "Agent %s: write-back guard produced %d extra actions",
-                    self.role.value, len(extra_actions),
+                    self.role.value,
+                    len(extra_actions),
                 )
             response.actions.extend(extra_actions)
         else:
@@ -169,7 +168,6 @@ class BaseAgent(ABC):
             primary_artifacts=[a.value for a in self.primary_artifact_types],
             dependency_artifacts=[a.value for a in self.dependency_artifact_types],
             can_spawn=self.can_spawn_subagents,
-            research_topic=self._research_topic,
             trend_signals=trend_signals,
             context=context,
             task=format_task(task),
@@ -204,7 +202,10 @@ class BaseAgent(ABC):
                 if corrected:
                     logger.info(
                         "Agent %s: action[%d] corrected action_type %r -> %r",
-                        self.role.value, i, raw_type, corrected,
+                        self.role.value,
+                        i,
+                        raw_type,
+                        corrected,
                     )
                     action["action_type"] = corrected
                 else:
@@ -218,7 +219,8 @@ class BaseAgent(ABC):
                     else "unknown"
                 )
                 action["target"] = action["content"].get(
-                    "artifact_type", fallback_target,
+                    "artifact_type",
+                    fallback_target,
                 )
 
             valid_actions.append(action)

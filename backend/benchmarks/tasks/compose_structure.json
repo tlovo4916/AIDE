@@ -1,0 +1,20 @@
+{
+  "task_id": "compose_structure",
+  "research_topic": "知识图谱在推荐系统中的应用",
+  "phase": "compose",
+  "description": "Test structural completeness evaluation with Chinese draft containing standard paper sections",
+  "input_artifacts": [
+    {
+      "artifact_type": "draft",
+      "artifact_id": "draft-001",
+      "created_by": "writer",
+      "content": "# 摘要\n\n本文综述了知识图谱在推荐系统中的应用现状和发展趋势。通过分析近五年的代表性工作，我们总结了三类主要方法：基于嵌入的方法、基于路径的方法和基于图神经网络的方法。\n\n# 引言\n\n推荐系统是互联网时代信息过滤的关键技术。传统协同过滤方法面临冷启动和数据稀疏性问题，知识图谱作为结构化知识的载体，为推荐系统提供了丰富的辅助信息。\n\n# 背景\n\n## 知识图谱基础\n知识图谱以三元组（头实体，关系，尾实体）形式组织知识。代表性知识图谱包括Freebase、Wikidata和CN-DBpedia。\n\n## 推荐系统概述\n推荐系统主要分为协同过滤、基于内容的推荐和混合推荐三大类。\n\n# 方法\n\n## 基于嵌入的方法\nTransR、TransE等知识图谱嵌入方法将实体和关系映射到低维空间。CKE和DKN将这些嵌入集成到推荐模型中。\n\n## 基于路径的方法\nKPRN和PGPR利用知识图谱中的路径信息捕获用户与物品之间的语义关联。\n\n# 结果\n\n实验表明，知识图谱增强的推荐系统在AUC和NDCG指标上平均提升5-15%。\n\n# 讨论\n\n尽管取得了显著进展，知识图谱推荐仍面临以下挑战：1）大规模知识图谱的计算效率；2）知识图谱的噪声和不完整性；3）动态知识更新。\n\n# 结论\n\n本文系统梳理了知识图谱在推荐系统中的应用，未来研究方向包括多模态知识图谱、时序知识图谱和可解释推荐。\n\n# 参考文献\n\n[1] Wang et al., 2019. KGAT: Knowledge Graph Attention Network.\n[2] Zhang et al., 2016. Collaborative Knowledge Base Embedding."
+    }
+  ],
+  "expected_evaluation": {
+    "structural_completeness": [0.7, 1.0],
+    "internal_consistency": [0.6, 1.0]
+  },
+  "expected_contradictions": [],
+  "expected_convergence": null
+}

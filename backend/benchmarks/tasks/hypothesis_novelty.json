@@ -1,0 +1,32 @@
+{
+  "task_id": "hypothesis_novelty",
+  "research_topic": "大语言模型推理优化",
+  "phase": "hypothesize",
+  "description": "Test specificity and novelty evaluation for Chinese-language hypotheses",
+  "input_artifacts": [
+    {
+      "artifact_type": "hypotheses",
+      "artifact_id": "hyp-001",
+      "created_by": "scientist",
+      "content": "假设一：通过动态量化策略，可以在推理阶段将大语言模型的内存占用降低40%以上，同时保持95%以上的原始精度。具体方法包括：混合精度量化（FP8/INT4），基于注意力头重要性的选择性量化，以及KV缓存压缩。"
+    },
+    {
+      "artifact_type": "hypotheses",
+      "artifact_id": "hyp-002",
+      "created_by": "scientist",
+      "content": "假设二：投机解码（Speculative Decoding）结合小模型草稿可以将自回归推理速度提升2-3倍，关键因素包括：草稿模型与目标模型的分布对齐度、验证步骤的批处理效率、以及Token接受率的动态调整策略。"
+    },
+    {
+      "artifact_type": "evidence_findings",
+      "artifact_id": "ev-001",
+      "created_by": "librarian",
+      "content": "现有研究表明，GPTQ和AWQ等量化方法可以将模型大小压缩到原来的1/4，但在复杂推理任务上精度下降约5-10%。参考文献: doi:10.48550/arXiv.2210.17323"
+    }
+  ],
+  "expected_evaluation": {
+    "specificity": [0.4, 0.8],
+    "coverage_breadth": [0.3, 0.8]
+  },
+  "expected_contradictions": [],
+  "expected_convergence": null
+}

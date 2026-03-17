@@ -49,11 +49,10 @@ class LibrarianAgent(BaseAgent):
         self,
         llm_router,
         write_back_guard,
-        research_topic: str = "",
         project_id: str = "",
         embedding_model: str | None = None,
     ) -> None:
-        super().__init__(llm_router, write_back_guard, research_topic=research_topic, project_id=project_id)
+        super().__init__(llm_router, write_back_guard, project_id=project_id)
         self._embedding_model = embedding_model
 
     async def execute(self, context: str, task: AgentTask) -> AgentResponse:
@@ -65,7 +64,7 @@ class LibrarianAgent(BaseAgent):
             logger.info("[Librarian] Web retrieval disabled, skipping")
             return context
 
-        query = (self._research_topic or task.description)[:200].strip()
+        query = task.description[:200].strip()
         if not query:
             return context
 
@@ -324,16 +323,19 @@ class LibrarianAgent(BaseAgent):
                     url = f"https://doi.org/{doi}"
                 elif source == "semantic_scholar" and pid:
                     url = f"https://www.semanticscholar.org/paper/{pid}"
-                graph.add_paper(pid, {
-                    "title": p.get("title", ""),
-                    "year": p.get("year"),
-                    "authors": ", ".join(p.get("authors", [])[:3]),
-                    "source": source,
-                    "citation_count": p.get("citation_count", 0),
-                    "url": url,
-                    "arxiv_id": arxiv_id,
-                    "doi": doi,
-                })
+                graph.add_paper(
+                    pid,
+                    {
+                        "title": p.get("title", ""),
+                        "year": p.get("year"),
+                        "authors": ", ".join(p.get("authors", [])[:3]),
+                        "source": source,
+                        "citation_count": p.get("citation_count", 0),
+                        "url": url,
+                        "arxiv_id": arxiv_id,
+                        "doi": doi,
+                    },
+                )
 
             graph.save()
             logger.info(

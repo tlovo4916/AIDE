@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -85,7 +85,7 @@ class HybridSearchEngine:
                         "distance": 1.0,
                     }
 
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         for did in rrf_scores:
             meta = doc_data[did].get("metadata", {})
             pub = meta.get("publish_date")

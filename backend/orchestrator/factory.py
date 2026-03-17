@@ -16,6 +16,7 @@ from backend.agents.librarian import LibrarianAgent
 from backend.agents.scientist import ScientistAgent
 from backend.agents.subagent import SubAgentPool
 from backend.agents.synthesizer import SynthesizerAgent
+from backend.agents.write_back_guard import WriteBackGuard
 from backend.agents.writer import WriterAgent
 from backend.api.ws import manager as ws_manager
 from backend.blackboard.actions import ActionExecutor
@@ -26,7 +27,6 @@ from backend.config import settings
 from backend.knowledge.trend_extractor import TrendExtractor
 from backend.llm.router import LLMRouter
 from backend.llm.tracker import TokenTracker
-from backend.memory.write_back_guard import WriteBackGuard
 from backend.models import Project, async_session_factory
 from backend.orchestrator.backtrack import BacktrackController
 from backend.orchestrator.convergence import ConvergenceDetector
@@ -155,44 +155,40 @@ async def _create_engine(
         AgentRole.DIRECTOR: DirectorAgent(
             llm_router,
             write_back_guard,
-            research_topic=research_topic,
             project_id=str(project_id),
         ),
         AgentRole.SCIENTIST: ScientistAgent(
             llm_router,
             write_back_guard,
-            research_topic=research_topic,
             project_id=str(project_id),
         ),
         AgentRole.LIBRARIAN: LibrarianAgent(
             llm_router,
             write_back_guard,
-            research_topic=research_topic,
             project_id=str(project_id),
             embedding_model=embedding_model,
         ),
         AgentRole.WRITER: WriterAgent(
             llm_router,
             write_back_guard,
-            research_topic=research_topic,
             project_id=str(project_id),
         ),
         AgentRole.CRITIC: CriticAgent(
             llm_router,
             write_back_guard,
-            research_topic=research_topic,
             project_id=str(project_id),
         ),
         AgentRole.SYNTHESIZER: SynthesizerAgent(
             llm_router,
             write_back_guard,
-            research_topic=research_topic,
             project_id=str(project_id),
         ),
     }
 
     planner = OrchestratorPlanner(
-        llm_router, research_topic=research_topic, lane_perspective=lane_perspective,
+        llm_router,
+        research_topic=research_topic,
+        lane_perspective=lane_perspective,
     )
     convergence = ConvergenceDetector()
     backtrack = BacktrackController()
@@ -213,6 +209,7 @@ async def _create_engine(
     if settings.openrouter_api_key:
         try:
             from backend.knowledge.embeddings import EmbeddingService
+
             embedding_service = EmbeddingService(model=embedding_model)
         except Exception:
             logger.warning("[Factory] Failed to create EmbeddingService for drift detection")
@@ -317,9 +314,7 @@ async def _collect_lane_artifacts(project_path: Path, num_lanes: int) -> str:
                             content = (await f.read())[:max_content_chars]
                         art_type = meta.get("artifact_type", group_name)
                         aid = meta.get("artifact_id", "")
-                        type_groups.setdefault(art_type, []).append(
-                            f"#### {aid}\n{content}"
-                        )
+                        type_groups.setdefault(art_type, []).append(f"#### {aid}\n{content}")
                 except Exception:
                     continue
 
@@ -378,7 +373,8 @@ async def _run_synthesis(
                 )
     if aggregated_scores:
         await engine._board.update_meta(
-            "phase_critic_scores", aggregated_scores,
+            "phase_critic_scores",
+            aggregated_scores,
         )
         logger.info(
             "[Factory] Aggregated lane critic scores: %s",
@@ -564,7 +560,9 @@ async def _run_multi_lane(
             try:
                 logger.info(
                     "[Factory] Lane %d starting for project %s (attempt %d)",
-                    idx, project_id, attempt,
+                    idx,
+                    project_id,
+                    attempt,
                 )
                 await eng.run()
                 logger.info("[Factory] Lane %d completed for project %s", idx, project_id)
@@ -577,7 +575,10 @@ async def _run_multi_lane(
             except Exception:
                 logger.exception(
                     "[Factory] Lane %d failed for project %s (attempt %d/%d)",
-                    idx, project_id, attempt, lane_max_retries + 1,
+                    idx,
+                    project_id,
+                    attempt,
+                    lane_max_retries + 1,
                 )
                 if attempt <= lane_max_retries:
                     backoff = 10 * attempt
@@ -591,9 +592,7 @@ async def _run_multi_lane(
                             workspace_path=lane_path,
                             research_topic=research_topic,
                             lane_index=idx,
-                            lane_perspective=_LANE_PERSPECTIVES[
-                                idx % len(_LANE_PERSPECTIVES)
-                            ],
+                            lane_perspective=_LANE_PERSPECTIVES[idx % len(_LANE_PERSPECTIVES)],
                             model_overrides=(
                                 lane_overrides[idx]
                                 if lane_overrides and idx < len(lane_overrides)

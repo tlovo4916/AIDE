@@ -1,0 +1,45 @@
+{
+  "task_id": "explore_coverage",
+  "research_topic": "Transformer attention mechanisms in computer vision",
+  "phase": "explore",
+  "description": "Test coverage breadth evaluation during exploration phase with diverse evidence findings",
+  "input_artifacts": [
+    {
+      "artifact_type": "evidence_findings",
+      "artifact_id": "ev-001",
+      "created_by": "scientist",
+      "content": "Vision Transformer (ViT) applies standard transformer attention to image patches. Self-attention computes pairwise relationships between all 16x16 patches, enabling global receptive fields from the first layer. Reference: https://arxiv.org/abs/2010.11929 Dosovitskiy et al., 2020."
+    },
+    {
+      "artifact_type": "evidence_findings",
+      "artifact_id": "ev-002",
+      "created_by": "scientist",
+      "content": "Swin Transformer introduces shifted window attention to reduce computational cost from O(n²) to O(n). Hierarchical feature maps enable dense prediction tasks like object detection and segmentation. Reference: https://arxiv.org/abs/2103.14030 Liu et al., 2021."
+    },
+    {
+      "artifact_type": "evidence_findings",
+      "artifact_id": "ev-003",
+      "created_by": "librarian",
+      "content": "Cross-attention mechanisms in DETR directly predict object bounding boxes without anchor boxes or NMS post-processing. The decoder cross-attends to encoder features using learned object queries. Reference: https://arxiv.org/abs/2005.12872 Carion et al., 2020."
+    },
+    {
+      "artifact_type": "directions",
+      "artifact_id": "dir-001",
+      "created_by": "director",
+      "content": "Research directions: 1) Efficient attention variants for high-resolution images 2) Hybrid CNN-Transformer architectures 3) Attention visualization and interpretability 4) Multi-scale attention for dense prediction"
+    },
+    {
+      "artifact_type": "directions",
+      "artifact_id": "dir-002",
+      "created_by": "director",
+      "content": "Gap analysis: Limited coverage of deformable attention mechanisms and their computational trade-offs compared to standard attention."
+    }
+  ],
+  "expected_evaluation": {
+    "coverage_breadth": [0.4, 0.9],
+    "source_diversity": [0.3, 1.0],
+    "subtopics": ["transformer", "attention", "vision", "computer"]
+  },
+  "expected_contradictions": [],
+  "expected_convergence": null
+}

@@ -92,6 +92,46 @@ class Settings(BaseSettings):
     enable_trend_extraction: bool = True
     trend_extraction_interval: int = 2
 
+    # -- Feature flags (Phase 2-4, all off by default) --
+    use_semantic_board: bool = False
+    use_multi_eval: bool = False
+    use_adaptive_planner: bool = False
+
+    # -- Embedding --
+    embedding_dimensions: int = 1536
+
+    # -- pgvector --
+    pgvector_enabled: bool = True
+
+    # -- Semantic layer (Phase 2 prep) --
+    relation_extraction_model: str = "deepseek-chat"
+    coverage_recompute_interval: int = 3
+    context_semantic_weight: float = 0.50
+    context_graph_weight: float = 0.15
+    context_recency_weight: float = 0.15
+    context_affinity_weight: float = 0.20
+    contradiction_confidence_threshold: float = 0.6
+    semantic_dedup_threshold: float = 0.85
+
+    # -- Convergence (Phase 3 prep) --
+    convergence_info_gain_threshold: float = 0.05
+    convergence_gain_window: int = 5
+    convergence_loop_threshold: float = 0.8
+
+    # -- Evaluation Engine --
+    eval_model: str = "deepseek-chat"
+    eval_cross_model: bool = True
+    eval_computable_weight: float = 0.6
+    eval_llm_weight: float = 0.4
+    eval_claim_extraction_model: str = "deepseek-chat"
+    eval_contradiction_threshold: float = 0.75
+    eval_info_gain_window: int = 5
+    eval_info_gain_threshold: float = 0.05
+    eval_loop_jaccard_threshold: float = 0.8
+
+    # -- Migration --
+    migrate_on_start: bool = False
+
     @property
     def projects_dir(self) -> Path:
         return self.workspace_dir / "projects"

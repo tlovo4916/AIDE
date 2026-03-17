@@ -1,0 +1,47 @@
+{
+  "task_id": "contradiction_detection",
+  "research_topic": "Impact of batch size on neural network training",
+  "phase": "evidence",
+  "description": "Test contradiction detection with planted contradictions (1 keyword-level, 1 semantic)",
+  "input_artifacts": [
+    {
+      "artifact_type": "evidence_findings",
+      "artifact_id": "ev-001",
+      "created_by": "scientist",
+      "content": "Large batch training with learning rate scaling achieves comparable accuracy to small batch training. Linear scaling rule: multiply learning rate by k when batch size is multiplied by k. Validated on ImageNet with batch sizes up to 8192 (Goyal et al., 2017)."
+    },
+    {
+      "artifact_type": "evidence_findings",
+      "artifact_id": "ev-002",
+      "created_by": "scientist",
+      "content": "Large batch training does not achieve comparable accuracy to small batch training. The generalization gap increases significantly beyond batch size 512, and linear scaling rule breaks down for very large batches. Sharp minima from large batches lead to poor test performance (Keskar et al., 2016)."
+    },
+    {
+      "artifact_type": "evidence_findings",
+      "artifact_id": "ev-003",
+      "created_by": "librarian",
+      "content": "Gradient noise is beneficial for escaping local minima. Small batch SGD provides natural gradient noise that acts as implicit regularization, leading to flatter minima with better generalization."
+    },
+    {
+      "artifact_type": "evidence_findings",
+      "artifact_id": "ev-004",
+      "created_by": "librarian",
+      "content": "Gradient noise from small batches is not beneficial and merely slows convergence. With proper learning rate warmup and LARS optimizer, large batch training consistently finds equally flat minima as small batch training (You et al., 2019)."
+    }
+  ],
+  "expected_evaluation": {
+    "citation_density": [0.2, 0.8],
+    "source_diversity": [0.0, 0.5]
+  },
+  "expected_contradictions": [
+    {
+      "claim_a": "Large batch training achieves comparable accuracy to small batch training",
+      "claim_b": "Large batch training does not achieve comparable accuracy to small batch training"
+    },
+    {
+      "claim_a": "Gradient noise is beneficial for escaping local minima",
+      "claim_b": "Gradient noise is not beneficial and merely slows convergence"
+    }
+  ],
+  "expected_convergence": null
+}

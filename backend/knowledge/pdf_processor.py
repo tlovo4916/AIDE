@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -245,7 +245,7 @@ class PDFProcessor:
                         **metadata,
                         "chunk_index": idx,
                         "total_chunks": len(chunks),
-                        "publish_date": datetime.utcnow().isoformat(),
+                        "publish_date": datetime.now(UTC).isoformat(),
                     },
                     token_count=self._count_tokens(chunk),
                     index=idx,

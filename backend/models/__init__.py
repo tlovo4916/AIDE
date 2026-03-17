@@ -33,18 +33,28 @@ async def get_session() -> AsyncSession:  # type: ignore[misc]
 
 
 async def init_db() -> None:
+    """Create tables from ORM metadata.
+
+    NOTE: Alembic migrations (backend/migrations/) are the source of truth
+    for schema changes. ``create_all`` is kept here for dev convenience
+    (auto-creates tables on first run without running ``alembic upgrade``).
+    """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Add concurrency column to existing projects table if missing
-        await conn.execute(
-            __import__("sqlalchemy").text(
-                "ALTER TABLE projects ADD COLUMN IF NOT EXISTS concurrency INTEGER DEFAULT 1"
-            )
-        )
 
 
+# -- Existing models --
+# -- Phase 1 models --
+from backend.models.artifact import Artifact, ArtifactRelation  # noqa: E402, F401
+from backend.models.challenge import Challenge  # noqa: E402, F401
 from backend.models.checkpoint import Checkpoint  # noqa: E402, F401
+from backend.models.claim import Claim, Contradiction  # noqa: E402, F401
+from backend.models.evaluation import EvaluationResult, KnowledgeState  # noqa: E402, F401
+from backend.models.info_request import InfoRequest  # noqa: E402, F401
+from backend.models.iteration_metric import IterationMetric  # noqa: E402, F401
+from backend.models.message import Message  # noqa: E402, F401
 from backend.models.project import Project  # noqa: E402, F401
+from backend.models.project_setting import ProjectSetting  # noqa: E402, F401
 from backend.models.token_usage import TokenUsage  # noqa: E402, F401
 
 __all__ = [
@@ -53,7 +63,20 @@ __all__ = [
     "async_session_factory",
     "get_session",
     "init_db",
+    # Existing
     "Project",
     "Checkpoint",
     "TokenUsage",
+    # Phase 1
+    "Artifact",
+    "ArtifactRelation",
+    "Challenge",
+    "Claim",
+    "Contradiction",
+    "EvaluationResult",
+    "InfoRequest",
+    "IterationMetric",
+    "KnowledgeState",
+    "Message",
+    "ProjectSetting",
 ]

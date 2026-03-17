@@ -26,8 +26,8 @@ logging.getLogger("chromadb").setLevel(logging.WARNING)
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     settings.workspace_dir.mkdir(parents=True, exist_ok=True)
     settings.projects_dir.mkdir(parents=True, exist_ok=True)
-    load_overrides()
     await init_db()
+    await load_overrides()
     yield
 
 

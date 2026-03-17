@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -99,8 +99,8 @@ class ArtifactMeta(BaseModel):
     artifact_id: str
     version: int = 1
     created_by: AgentRole
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     active_count: int = 0
     superseded: bool = False
     tags: list[str] = Field(default_factory=list)
@@ -125,7 +125,7 @@ class ChallengeRecord(BaseModel):
     response: str | None = None
     responder: AgentRole | None = None
     target_agent: AgentRole | None = None  # Agent that should respond to this challenge
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     resolved_at: datetime | None = None
 
 
@@ -135,7 +135,7 @@ class Message(BaseModel):
     to_agent: AgentRole | None = None  # None = broadcast
     content: str
     refs: list[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class DecisionRecord(BaseModel):
@@ -146,7 +146,7 @@ class DecisionRecord(BaseModel):
     chosen: str
     rationale: str
     decided_by: AgentRole
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ class CheckpointEvent(BaseModel):
     phase: ResearchPhase
     reason: str
     summary: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     user_action: CheckpointAction | None = None
     user_feedback: str | None = None
     resolved_at: datetime | None = None
@@ -250,3 +250,93 @@ class SearchResult(BaseModel):
     score: float
     metadata: dict[str, Any] = Field(default_factory=dict)
     publish_date: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
+# Evaluation Engine models
+# ---------------------------------------------------------------------------
+
+
+class EvaluationDimension(StrEnum):
+    COVERAGE_BREADTH = "coverage_breadth"
+    SOURCE_DIVERSITY = "source_diversity"
+    TERMINOLOGY_COVERAGE = "terminology_coverage"
+    SPECIFICITY = "specificity"
+    NOVELTY = "novelty"
+    LOGICAL_COHERENCE = "logical_coherence"
+    CITATION_DENSITY = "citation_density"
+    EVIDENCE_MAPPING = "evidence_mapping"
+    METHODOLOGICAL_RIGOR = "methodological_rigor"
+    STRUCTURAL_COMPLETENESS = "structural_completeness"
+    ARGUMENT_FLOW = "argument_flow"
+    CITATION_INTEGRATION = "citation_integration"
+    INTERNAL_CONSISTENCY = "internal_consistency"
+
+
+class DimensionScore(BaseModel):
+    name: str
+    computable_value: float | None = None
+    llm_value: float | None = None
+    combined: float = 0.0
+    weight: float = 1.0
+    evidence: list[str] = Field(default_factory=list)
+
+
+class PhaseEvaluation(BaseModel):
+    phase: ResearchPhase
+    dimensions: dict[str, DimensionScore] = Field(default_factory=dict)
+    composite_score: float = 0.0
+    evaluator_model: str = ""
+    evaluator_provider: str = ""
+    raw_evidence: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class Claim(BaseModel):
+    claim_id: str
+    text: str
+    source_artifact: str
+    claim_type: str = ""
+    confidence: str = "moderate"
+    embedding: list[float] = Field(default_factory=list)
+
+
+class Contradiction(BaseModel):
+    contradiction_id: str
+    claim_a: Claim
+    claim_b: Claim
+    relationship: str = "contradictory"
+    explanation: str = ""
+    severity: float = 0.5
+    detected_by: str = ""
+
+
+class InformationGainMetric(BaseModel):
+    iteration: int
+    information_gain: float = 0.0
+    artifact_count_delta: int = 0
+    unique_claim_delta: int = 0
+    is_diminishing: bool = False
+    is_loop_detected: bool = False
+
+
+class BenchmarkTask(BaseModel):
+    task_id: str
+    research_topic: str
+    phase: str
+    input_artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    expected_evaluation: dict[str, Any] = Field(default_factory=dict)
+    expected_contradictions: list[dict[str, Any]] = Field(default_factory=list)
+    expected_convergence: bool | None = None
+    description: str = ""
+
+
+class BenchmarkResult(BaseModel):
+    task_id: str
+    config_name: str = "baseline"
+    evaluation: PhaseEvaluation | None = None
+    contradictions_found: list[Contradiction] = Field(default_factory=list)
+    convergence_metric: InformationGainMetric | None = None
+    passed: bool = False
+    duration_seconds: float = 0.0
+    error: str | None = None

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Protocol
 
 from backend.types import ConvergenceSignals, ResearchPhase
@@ -90,7 +90,7 @@ class BacktrackController:
             {
                 "from_phase": source_phase.value,
                 "to_phase": target_phase.value,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             },
         )
 

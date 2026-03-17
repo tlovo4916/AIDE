@@ -6,7 +6,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import update
@@ -38,7 +38,7 @@ class CheckpointManager:
         summary: dict[str, Any],
     ) -> CheckpointEvent:
         checkpoint_id = str(uuid.uuid4())
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         async with self._session_factory() as session:
             row = CheckpointModel(
@@ -151,7 +151,7 @@ class CheckpointManager:
                     .values(
                         user_action=action.value,
                         user_feedback=feedback,
-                        resolved_at=datetime.utcnow(),
+                        resolved_at=datetime.now(UTC),
                     )
                 )
                 await session.execute(stmt)

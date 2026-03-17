@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from backend.config import settings
 
@@ -31,50 +32,128 @@ _OVERRIDES_FIELDS = [
     "convergence_min_critic_score",
 ]
 
+_KEY_FIELDS = {
+    "deepseek_api_key",
+    "openrouter_api_key",
+    "anthropic_api_key",
+    "semantic_scholar_api_key",
+}
+
+# Migrate legacy short embedding model names to full OpenRouter paths
+_EMBED_MIGRATION = {
+    "text-embedding-3-small": "openai/text-embedding-3-small",
+    "text-embedding-3-large": "openai/text-embedding-3-large",
+}
+
 
 def _overrides_path() -> Path:
     return settings.workspace_dir / "settings_overrides.json"
 
 
-def load_overrides() -> None:
-    """从持久化文件加载设置覆盖，在启动时调用。"""
+def _apply_overrides(data: dict) -> None:
+    """Apply a dict of overrides to the global settings object."""
+    if data.get("embedding_model") in _EMBED_MIGRATION:
+        data["embedding_model"] = _EMBED_MIGRATION[data["embedding_model"]]
+    for field in _OVERRIDES_FIELDS:
+        if field not in data or data[field] is None:
+            continue
+        if isinstance(data[field], dict) and not data[field]:
+            continue
+        if field in _KEY_FIELDS and data[field] == "":
+            continue
+        setattr(settings, field, data[field])
+
+
+def _load_json_overrides() -> dict | None:
+    """Load overrides from JSON file (legacy)."""
     path = _overrides_path()
     if not path.exists():
-        return
+        return None
     try:
-        data: dict = json.loads(path.read_text())
-        # Migrate legacy short embedding model names to full OpenRouter paths
-        _EMBED_MIGRATION = {
-            "text-embedding-3-small": "openai/text-embedding-3-small",
-            "text-embedding-3-large": "openai/text-embedding-3-large",
-        }
-        if data.get("embedding_model") in _EMBED_MIGRATION:
-            data["embedding_model"] = _EMBED_MIGRATION[data["embedding_model"]]
-        _KEY_FIELDS = {"deepseek_api_key", "openrouter_api_key", "anthropic_api_key",
-                       "semantic_scholar_api_key"}
-        for field in _OVERRIDES_FIELDS:
-            if field not in data or data[field] is None:
-                continue
-            # 空 dict / 空字符串 key 不覆盖（保留 .env 中的真实值）
-            if isinstance(data[field], dict) and not data[field]:
-                continue
-            if field in _KEY_FIELDS and data[field] == "":
-                continue
-            setattr(settings, field, data[field])
-        logger.info("Settings overrides loaded from %s", path)
+        return json.loads(path.read_text())
     except Exception as exc:
-        logger.warning("Failed to load settings overrides: %s", exc)
+        logger.warning("Failed to load JSON overrides: %s", exc)
+        return None
 
 
-def _save_overrides() -> None:
-    """将当前设置持久化到 workspace volume。"""
+async def load_overrides() -> None:
+    """Load settings overrides: try DB first, fall back to JSON file.
+
+    If DB table is empty but JSON file exists, migrate settings to DB.
+    """
+    db_data: dict | None = None
+    try:
+        from backend.models import ProjectSetting, async_session_factory
+
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(ProjectSetting).where(ProjectSetting.project_id.is_(None))
+            )
+            rows = result.scalars().all()
+            if rows:
+                db_data = {}
+                for row in rows:
+                    try:
+                        db_data[row.key] = json.loads(row.value)
+                    except (json.JSONDecodeError, TypeError):
+                        db_data[row.key] = row.value
+                _apply_overrides(db_data)
+                logger.info("Settings loaded from DB (%d keys)", len(db_data))
+                return
+    except Exception as exc:
+        logger.warning("Failed to load settings from DB: %s", exc)
+
+    # Fall back to JSON file
+    json_data = _load_json_overrides()
+    if json_data:
+        _apply_overrides(json_data)
+        logger.info("Settings loaded from JSON file")
+        # Migrate to DB on first load
+        try:
+            await _save_overrides_to_db(json_data)
+            logger.info("Migrated JSON settings to DB")
+        except Exception as exc:
+            logger.warning("Failed to migrate JSON settings to DB: %s", exc)
+
+
+async def _save_overrides_to_db(data: dict | None = None) -> None:
+    """Upsert current settings into project_settings table (project_id=NULL for global)."""
+    if data is None:
+        data = {field: getattr(settings, field) for field in _OVERRIDES_FIELDS}
+    try:
+        from backend.models import ProjectSetting, async_session_factory
+
+        async with async_session_factory() as session:
+            for key, value in data.items():
+                if key not in _OVERRIDES_FIELDS:
+                    continue
+                value_str = json.dumps(value, default=str)
+                # Try to find existing
+                result = await session.execute(
+                    select(ProjectSetting).where(
+                        ProjectSetting.project_id.is_(None),
+                        ProjectSetting.key == key,
+                    )
+                )
+                existing = result.scalar_one_or_none()
+                if existing:
+                    existing.value = value_str
+                else:
+                    session.add(ProjectSetting(project_id=None, key=key, value=value_str))
+            await session.commit()
+    except Exception as exc:
+        logger.error("Failed to save settings to DB: %s", exc)
+
+
+def _save_json_overrides() -> None:
+    """Save current settings to JSON file (backup)."""
     path = _overrides_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {field: getattr(settings, field) for field in _OVERRIDES_FIELDS}
         path.write_text(json.dumps(data, default=str))
     except Exception as exc:
-        logger.error("Failed to save settings overrides: %s", exc)
+        logger.error("Failed to save JSON overrides: %s", exc)
 
 
 class LLMSettings(BaseModel):
@@ -158,5 +237,7 @@ async def update_settings(body: LLMSettings) -> LLMSettings:
     settings.max_iterations_per_phase = body.max_iterations_per_phase
     settings.convergence_min_critic_score = body.convergence_min_critic_score
 
-    _save_overrides()
+    # Save to both DB and JSON (JSON as fallback)
+    await _save_overrides_to_db()
+    _save_json_overrides()
     return await get_settings()

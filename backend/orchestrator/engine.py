@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable, Coroutine
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -244,7 +244,9 @@ class OrchestrationEngine:
                         [at.value for at in missing],
                     )
                 decision = await self._planner.plan_next_action(
-                    summary, self._phase, self._iteration,
+                    summary,
+                    self._phase,
+                    self._iteration,
                     open_challenges=open_challenges or None,
                     missing_artifact_types=missing or None,
                 )
@@ -294,7 +296,7 @@ class OrchestrationEngine:
                         "task": decision.task_description[:200],
                         "phase": self._phase.value,
                         "iteration": self._iteration,
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now(UTC).isoformat(),
                     },
                 )
 
@@ -362,7 +364,7 @@ class OrchestrationEngine:
                     {
                         "agent": decision.agent_to_invoke.value,
                         "action": decision.task_description[:200],
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now(UTC).isoformat(),
                         "metadata": {
                             "iteration": self._iteration,
                             "actions": len(actions),
@@ -449,17 +451,14 @@ class OrchestrationEngine:
 
         # Inject pending challenges targeted at this agent into the task description
         agent_challenges = [
-            ch for ch in await self._board.get_open_challenges()
+            ch
+            for ch in await self._board.get_open_challenges()
             if getattr(ch, "target_agent", None) == decision.agent_to_invoke
         ]
         if agent_challenges:
-            ch_lines = [
-                "\n\n[PENDING CHALLENGES — YOU MUST ADDRESS THESE]"
-            ]
+            ch_lines = ["\n\n[PENDING CHALLENGES — YOU MUST ADDRESS THESE]"]
             for ch in agent_challenges[:3]:
-                ch_lines.append(
-                    f"Challenge from {ch.challenger.value}: {ch.argument[:300]}"
-                )
+                ch_lines.append(f"Challenge from {ch.challenger.value}: {ch.argument[:300]}")
             ch_lines.append(
                 "You MUST include RESOLVE_CHALLENGE actions in your response "
                 "to address these challenges."
@@ -474,7 +473,8 @@ class OrchestrationEngine:
         )
 
         context = await self._build_state_summary(
-            self._board, role=decision.agent_to_invoke,
+            self._board,
+            role=decision.agent_to_invoke,
         )
         response = await agent.execute(context, task)
 
@@ -499,17 +499,12 @@ class OrchestrationEngine:
         # Post-check: did the agent actually resolve its challenges?
         if agent_challenges:
             resolved_ids = {
-                a.target
-                for a in response.actions
-                if a.action_type == ActionType.RESOLVE_CHALLENGE
+                a.target for a in response.actions if a.action_type == ActionType.RESOLVE_CHALLENGE
             }
-            unresolved = [
-                ch for ch in agent_challenges if ch.challenge_id not in resolved_ids
-            ]
+            unresolved = [ch for ch in agent_challenges if ch.challenge_id not in resolved_ids]
             if unresolved:
                 logger.warning(
-                    "[Engine] %s had %d challenge(s) but resolved %d; "
-                    "%d still open: %s",
+                    "[Engine] %s had %d challenge(s) but resolved %d; %d still open: %s",
                     decision.agent_to_invoke.value,
                     len(agent_challenges),
                     len(resolved_ids),
@@ -588,7 +583,9 @@ class OrchestrationEngine:
             )
 
             raw = await self._planner._llm_router.generate(
-                cfg.orchestrator_model, prompt, json_mode=True,
+                cfg.orchestrator_model,
+                prompt,
+                json_mode=True,
             )
             from backend.utils.json_utils import safe_json_loads
 
@@ -597,9 +594,7 @@ class OrchestrationEngine:
                 logger.warning("[Engine] Lessons learned: LLM returned non-JSON")
                 return
 
-            lessons_dir = (
-                cfg.workspace_dir / "global_knowledge" / "lessons"
-            )
+            lessons_dir = cfg.workspace_dir / "global_knowledge" / "lessons"
             lessons_dir.mkdir(parents=True, exist_ok=True)
             lessons_path = lessons_dir / f"{self._project_id}.json"
             lessons_path.write_text(json.dumps(lessons, ensure_ascii=False, indent=2))
@@ -648,7 +643,8 @@ class OrchestrationEngine:
                 if pitfalls:
                     summary += "\nPitfalls to avoid: " + "; ".join(pitfalls[:5])
                 await self._board.update_meta(
-                    "lessons_learned", summary[:2000],
+                    "lessons_learned",
+                    summary[:2000],
                 )
                 logger.info(
                     "[Engine] Injected lessons from %d previous projects",
@@ -817,6 +813,7 @@ class OrchestrationEngine:
         if match_ratio is None:
             try:
                 import jieba
+
                 topic_words = set(jieba.cut(self._research_topic))
                 topic_words = {w for w in topic_words if len(w) > 1}
                 if topic_words:
@@ -851,7 +848,10 @@ class OrchestrationEngine:
                 "[Engine] ON-TOPIC CHECK FAILED (%s) at iteration %d: "
                 "score=%.2f (threshold=%.2f). "
                 "Research may have drifted from: %r",
-                method, self._iteration, match_ratio, threshold,
+                method,
+                self._iteration,
+                match_ratio,
+                threshold,
                 self._research_topic[:80],
             )
             await self._ws_broadcast(
@@ -871,7 +871,8 @@ class OrchestrationEngine:
             self._topic_drift_detected = False
             logger.debug(
                 "[Engine] On-topic check passed (%s, score=%.2f)",
-                method, match_ratio,
+                method,
+                match_ratio,
             )
 
     @staticmethod
@@ -926,7 +927,9 @@ class OrchestrationEngine:
         return None
 
     async def _build_state_summary(
-        self, board: Board, role: AgentRole | None = None,
+        self,
+        board: Board,
+        role: AgentRole | None = None,
     ) -> str:
         from backend.blackboard.context_builder import build_budget_context
 
