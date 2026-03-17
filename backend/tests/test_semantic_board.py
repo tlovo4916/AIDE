@@ -384,8 +384,8 @@ class TestFactoryFeatureFlag:
         """When use_semantic_board is True, factory would create SemanticBoard."""
         from backend.config import settings
 
-        # Default should be False
-        assert settings.use_semantic_board is False
+        # Default is now True (feature flags enabled post-Phase 5)
+        assert settings.use_semantic_board is True
 
         # SemanticBoard can be imported
         from backend.blackboard.semantic_board import SemanticBoard

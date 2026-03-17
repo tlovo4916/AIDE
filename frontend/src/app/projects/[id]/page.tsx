@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -15,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ProjectSidebarProvider, useProjectSidebar } from "@/contexts/ProjectSidebarContext";
+import { getSettings } from "@/lib/api";
 import { useProjectState } from "./_hooks/useProjectState";
 import { PHASES } from "./_utils/formatters";
 import { OverviewSection } from "./_components/OverviewSection";
@@ -23,6 +25,7 @@ import { MessagesSection } from "./_components/MessagesSection";
 import { KnowledgeSection } from "./_components/KnowledgeSection";
 import { PaperSection } from "./_components/PaperSection";
 import { LaneTabBar } from "./_components/LaneTabBar";
+import { EvaluationSection } from "./_components/EvaluationSection";
 
 export default function ProjectPage() {
   const params = useParams<{ id: string }>();
@@ -74,6 +77,18 @@ function ProjectContent({
   const sidebar = useProjectSidebar();
   const project = state.project!;
   const activeSection = sidebar?.activeSection ?? "overview";
+
+  // Load convergence thresholds from backend settings
+  const [convergenceMinScore, setConvergenceMinScore] = useState(7.0);
+  const [infoGainThreshold, setInfoGainThreshold] = useState(0.05);
+  useEffect(() => {
+    getSettings()
+      .then((s) => {
+        if (typeof s.convergence_min_critic_score === "number") setConvergenceMinScore(s.convergence_min_critic_score);
+        if (typeof s.convergence_info_gain_threshold === "number") setInfoGainThreshold(s.convergence_info_gain_threshold);
+      })
+      .catch(() => {});
+  }, []);
 
   return (
     <div className="animate-fade-in">
@@ -154,6 +169,30 @@ function ProjectContent({
             isLoading: state.blackboard.isLoading,
           }}
           wsStatus={state.ws.status}
+          latestEvaluation={
+            state.evaluations.length > 0
+              ? (() => {
+                  const latest = state.evaluations[state.evaluations.length - 1];
+                  return {
+                    composite_score: latest.composite_score,
+                    dimensions: latest.dimensions,
+                    phase: latest.phase,
+                    iteration: latest.iteration,
+                  };
+                })()
+              : null
+          }
+          convergenceStatus={
+            state.evaluations.length > 0
+              ? {
+                  quality_met: state.evaluations[state.evaluations.length - 1].composite_score >= convergenceMinScore,
+                  info_exhausted:
+                    state.iterationMetrics.length >= 3 &&
+                    (state.iterationMetrics[state.iterationMetrics.length - 1]?.information_gain ?? 1) < infoGainThreshold,
+                  no_contradictions: state.contradictions.filter((c) => c.status === "unresolved").length === 0,
+                }
+              : null
+          }
         />
       )}
 
@@ -176,6 +215,18 @@ function ProjectContent({
           projectId={projectId}
           citationGraph={state.citationGraph}
           onLoadCitationGraph={state.loadCitationGraph}
+        />
+      )}
+
+      {activeSection === "evaluation" && (
+        <EvaluationSection
+          projectId={projectId}
+          evaluations={state.evaluations}
+          iterationMetrics={state.iterationMetrics}
+          claims={state.claims}
+          contradictions={state.contradictions}
+          plannerDecisions={state.plannerDecisions}
+          currentPhase={project.phase}
         />
       )}
 

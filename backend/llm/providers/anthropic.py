@@ -65,7 +65,10 @@ class AnthropicProvider:
                 "You must respond with valid JSON only. "
                 "No markdown fences, no prose, no explanations."
             )
-            system_prompt = f"{json_instruction}\n\n{system_prompt}" if system_prompt else json_instruction
+            if system_prompt:
+                system_prompt = f"{json_instruction}\n\n{system_prompt}"
+            else:
+                system_prompt = json_instruction
 
         # Ensure at least one user message
         if not api_messages:

@@ -6,6 +6,7 @@ import {
   Pause,
   Loader2,
   CheckCircle2,
+  XCircle,
   Clock,
   Calendar,
 } from "lucide-react";
@@ -76,6 +77,17 @@ interface OverviewSectionProps {
     isLoading: boolean;
   };
   wsStatus: string;
+  latestEvaluation?: {
+    composite_score: number;
+    dimensions: Record<string, { combined: number; weight: number }>;
+    phase: string;
+    iteration: number;
+  } | null;
+  convergenceStatus?: {
+    quality_met: boolean;
+    info_exhausted: boolean;
+    no_contradictions: boolean;
+  } | null;
 }
 
 export function OverviewSection({
@@ -88,6 +100,8 @@ export function OverviewSection({
   onToggleRunning,
   blackboard,
   wsStatus,
+  latestEvaluation,
+  convergenceStatus,
 }: OverviewSectionProps) {
   const { t } = useLocale();
   const currentIdx = PHASES.findIndex((p) => p.key === project.phase);
@@ -104,6 +118,12 @@ export function OverviewSection({
         onToggleRunning={onToggleRunning}
         wsStatus={wsStatus}
       />
+
+      {/* Evaluation Score & Convergence Progress */}
+      <div className="grid grid-cols-2 gap-4">
+        <MiniScoreCard latestEvaluation={latestEvaluation} />
+        <ConvergenceProgressCard convergenceStatus={convergenceStatus} />
+      </div>
 
       {/* Research Pipeline — Canvas */}
       <div className="space-y-4">
@@ -587,4 +607,103 @@ function getPhaseArtifactCount(phase: string, artifacts: Record<string, unknown[
     if (Array.isArray(arr)) count += arr.length;
   }
   return count;
+}
+
+function MiniScoreCard({
+  latestEvaluation,
+}: {
+  latestEvaluation?: {
+    composite_score: number;
+    dimensions: Record<string, { combined: number; weight: number }>;
+    phase: string;
+    iteration: number;
+  } | null;
+}) {
+  const { t } = useLocale();
+  const hasData = latestEvaluation != null;
+  const score = hasData ? latestEvaluation.composite_score : 0;
+  const scoreColor =
+    score >= 7 ? "text-green-400" : score >= 4 ? "text-amber-400" : "text-red-400";
+
+  return (
+    <div className="rounded-xl border border-aide-border bg-aide-bg-tertiary p-4">
+      <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-aide-text-muted">
+        {t("section.compositeScore")}
+      </h4>
+      {hasData ? (
+        <div className="flex items-center gap-3">
+          <span className={`text-4xl font-bold ${scoreColor}`}>
+            {score.toFixed(1)}
+          </span>
+          <div className="flex flex-col gap-1">
+            <Badge variant="phase">
+              {latestEvaluation.phase}
+            </Badge>
+            <span className="text-xs text-aide-text-muted">
+              {t("misc.iter")} {latestEvaluation.iteration}
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3">
+          <span className="text-4xl font-bold text-aide-text-muted">&mdash;</span>
+          <span className="text-xs text-aide-text-muted">
+            {t("empty.noEvaluations")}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConvergenceProgressCard({
+  convergenceStatus,
+}: {
+  convergenceStatus?: {
+    quality_met: boolean;
+    info_exhausted: boolean;
+    no_contradictions: boolean;
+  } | null;
+}) {
+  const { t } = useLocale();
+
+  const conditions = [
+    { key: "quality_met" as const, met: convergenceStatus?.quality_met ?? false, label: t("section.qualityMet") },
+    { key: "info_exhausted" as const, met: convergenceStatus?.info_exhausted ?? false, label: t("section.infoExhausted") },
+    { key: "no_contradictions" as const, met: convergenceStatus?.no_contradictions ?? false, label: t("section.noContradictions") },
+  ];
+
+  const metCount = conditions.filter((c) => c.met).length;
+
+  return (
+    <div className="rounded-xl border border-aide-border bg-aide-bg-tertiary p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-aide-text-muted">
+          {t("section.convergenceProgress")}
+        </h4>
+        <span className="text-xs text-aide-text-secondary">
+          {t("section.conditionsMet", { n: metCount })}
+        </span>
+      </div>
+      <div className="flex flex-row gap-3">
+        {conditions.map((cond) => (
+          <div
+            key={cond.key}
+            className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border ${
+              cond.met
+                ? "bg-green-500/10 text-green-400 border-green-500/20"
+                : "bg-red-500/10 text-red-400 border-red-500/20"
+            }`}
+          >
+            {cond.met ? (
+              <CheckCircle2 className="h-3.5 w-3.5" />
+            ) : (
+              <XCircle className="h-3.5 w-3.5" />
+            )}
+            <span>{cond.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }

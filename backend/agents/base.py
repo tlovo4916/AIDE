@@ -9,6 +9,7 @@ from typing import Protocol, runtime_checkable
 
 import jinja2
 
+from backend.protocols import LLMRouter
 from backend.types import (
     ActionType,
     AgentResponse,
@@ -22,22 +23,6 @@ from backend.utils.json_utils import safe_json_loads
 logger = logging.getLogger(__name__)
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
-
-
-@runtime_checkable
-class LLMRouter(Protocol):
-    """Structural interface for the LLM routing layer."""
-
-    async def generate(
-        self,
-        model: str,
-        prompt: str,
-        *,
-        system_prompt: str | None = None,
-        project_id: str | None = None,
-        agent_role: AgentRole | None = None,
-        json_mode: bool = False,
-    ) -> str: ...
 
 
 @runtime_checkable
@@ -93,6 +78,55 @@ class BaseAgent(ABC):
     def _resolve_model(self) -> str:
         """Return the model to use, respecting per-lane → global → default priority."""
         return self._llm_router.resolve_model(self.role)
+
+    async def _query_board(
+        self, artifact_type: ArtifactType, limit: int | None = None
+    ) -> list:
+        """Query board for artifacts of given type, returning empty list on failure."""
+        if not self._board:
+            return []
+        try:
+            artifacts = await self._board.list_artifacts(artifact_type)
+            if limit is not None:
+                artifacts = artifacts[:limit]
+            return artifacts
+        except Exception as exc:
+            logger.debug("Board query for %s failed: %s", artifact_type, exc)
+            return []
+
+    async def _build_artifact_summary(
+        self,
+        artifact_types: list[tuple[ArtifactType, str]],
+        section_title: str,
+        limit: int | None = None,
+    ) -> list[str]:
+        """Query board for multiple artifact types and build a summary.
+
+        Args:
+            artifact_types: List of (ArtifactType, display_label) tuples.
+            section_title: Header for the summary section.
+            limit: Optional limit per artifact type.
+
+        Returns:
+            Summary lines (empty if no artifacts found).
+        """
+        counts: dict[str, int] = {}
+        all_artifacts: dict[str, list] = {}
+        found_any = False
+        for art_type, label in artifact_types:
+            items = await self._query_board(art_type, limit=limit)
+            counts[label] = len(items)
+            all_artifacts[label] = items
+            if items:
+                found_any = True
+
+        if not found_any:
+            return []
+
+        lines = [f"\n## {section_title} (from board)"]
+        for _, label in artifact_types:
+            lines.append(f"  {label}: {counts[label]} artifact(s)")
+        return lines
 
     async def pre_execute(self, context: str, task: AgentTask) -> str:
         """Hook called before prompt building. Override to enrich context.

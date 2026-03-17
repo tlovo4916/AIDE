@@ -10,15 +10,14 @@ import {
   deleteProject,
   getExportedPaper,
   getProjectUsage,
-  getCitationGraph,
-  getLaneStatuses,
   type ProjectTokenUsage,
-  type CitationGraphData,
-  type LaneStatus,
 } from "@/lib/api";
 import { useTypedWebSocket } from "@/hooks/useTypedWebSocket";
 import { useBlackboard } from "@/hooks/useBlackboard";
 import { parseTS, formatElapsed } from "../_utils/formatters";
+import { useEvaluationData } from "./useEvaluationData";
+import { useLaneState } from "./useLaneState";
+import { usePaperState } from "./usePaperState";
 
 export interface Project {
   id: string;
@@ -45,12 +44,8 @@ export interface Checkpoint {
   options: { label: string; value: string }[];
 }
 
-export interface LaneState {
-  total: number;
-  completed: number[];
-  errors: number[];
-  synthesizing: boolean;
-}
+// Re-export for backward compatibility
+export type { LaneState } from "./useLaneState";
 
 export function useProjectState(projectId: string) {
   const [project, setProject] = useState<Project | null>(null);
@@ -64,83 +59,51 @@ export function useProjectState(projectId: string) {
   const [actionLoading, setActionLoading] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [paperContent, setPaperContent] = useState<string | null>(null);
-  const [tokenUsage, setTokenUsage] = useState<ProjectTokenUsage | null>(null);
-  const [citationGraph, setCitationGraph] = useState<CitationGraphData | null>(null);
-  const [laneState, setLaneState] = useState<LaneState | null>(null);
-  const [activeLane, setActiveLane] = useState<number | "synthesis" | null>(null);
-  const [laneStatuses, setLaneStatuses] = useState<LaneStatus[]>([]);
 
   const ws = useTypedWebSocket(projectId);
-  // When a specific lane is active, pass it to useBlackboard to scope data;
-  // "synthesis" reads main workspace (no lane param); null = single-lane mode.
-  const blackboardLane = activeLane === null ? undefined : activeLane;
+
+  // Composed hooks
+  const lane = useLaneState(projectId, project?.concurrency, project?.status, ws);
+  const evalData = useEvaluationData(projectId, project?.status, ws);
+  const paper = usePaperState(projectId, project?.status);
+
+  // Blackboard scoped to active lane
+  const blackboardLane = lane.activeLane === null ? undefined : lane.activeLane;
   const blackboard = useBlackboard(ws, projectId, blackboardLane);
 
-  // Initial load
+  // Initial project load
   useEffect(() => {
     getProject(projectId)
-      .then((p) => {
-        setProject(p);
-        // Multi-lane: default to lane 0
-        if ((p.concurrency ?? 1) > 1) {
-          setActiveLane(0);
-          getLaneStatuses(projectId).then((statuses) => {
-            setLaneStatuses(statuses);
-            // For completed projects, reconstruct laneState from REST data
-            // so that LaneTabBar shows checkmarks instead of spinners
-            if (p.status === "completed" && statuses.length > 0) {
-              setLaneState({
-                total: statuses.length,
-                completed: statuses.map((s) => s.lane),
-                errors: [],
-                synthesizing: false,
-              });
-            }
-          }).catch(() => {});
-        }
-        if (p.status === "completed") {
-          getProjectUsage(projectId).then(setTokenUsage).catch(() => {});
-          getExportedPaper(projectId)
-            .then((data) => setPaperContent(data.content))
-            .catch(() => {});
-        }
-      })
+      .then((p) => setProject(p))
       .catch(() => setProject(null))
       .finally(() => setLoading(false));
   }, [projectId]);
 
-  // 30s polling
+  // 30s polling for project status
   useEffect(() => {
     const timer = setInterval(() => {
       getProject(projectId)
         .then((p) => setProject((prev) => prev ? { ...prev, phase: p.phase, status: p.status, updated_at: p.updated_at } : p))
         .catch(() => {});
-      // Also refresh lane statuses for multi-lane projects
-      if (activeLane !== null) {
-        getLaneStatuses(projectId).then(setLaneStatuses).catch(() => {});
-      }
     }, 30_000);
     return () => clearInterval(timer);
-  }, [projectId, activeLane]);
+  }, [projectId]);
 
-  // WebSocket subscriptions
+  // Core WS subscriptions (agent events, checkpoints, phase changes, topic drift, research completion)
   useEffect(() => {
     if (!ws.subscribe) return;
 
     const unsubs = [
       ws.subscribe("AgentStarted", (payload) => {
-        const eventLane = (payload as unknown as Record<string, unknown>).lane_index as number | undefined;
-        // Update per-lane status
+        const eventLane = payload.lane_index;
         if (eventLane !== undefined) {
-          setLaneStatuses((prev) =>
+          lane.setLaneStatuses((prev) =>
             prev.map((ls) =>
               ls.lane === eventLane ? { ...ls, phase: payload.phase, iteration: payload.iteration } : ls
             )
           );
         }
-        // Only update global agent/iteration if matching active lane or no lane
-        if (activeLane === null || activeLane === eventLane) {
+        if (lane.activeLane === null || lane.activeLane === eventLane) {
           setCurrentAgent({ agent: payload.agent, task: payload.task });
           setCurrentIteration(payload.iteration);
           setProject((prev) => prev ? { ...prev, phase: payload.phase } : prev);
@@ -158,19 +121,24 @@ export function useProjectState(projectId: string) {
       ws.subscribe("AgentError", () => setCurrentAgent(null)),
       ws.subscribe("CheckpointCreated", (payload) => {
         setCurrentAgent(null);
-        setCheckpoint(payload as unknown as Checkpoint);
+        setCheckpoint({
+          id: payload.id,
+          phase: payload.phase,
+          summary: payload.summary,
+          options: payload.options,
+        });
       }),
       ws.subscribe("CheckpointResolved", () => setCheckpoint(null)),
       ws.subscribe("PhaseAdvanced", (payload) => {
-        const eventLane = (payload as unknown as Record<string, unknown>).lane_index as number | undefined;
+        const eventLane = payload.lane_index;
         if (eventLane !== undefined) {
-          setLaneStatuses((prev) =>
+          lane.setLaneStatuses((prev) =>
             prev.map((ls) =>
               ls.lane === eventLane ? { ...ls, phase: payload.phase } : ls
             )
           );
         }
-        if (activeLane === null || activeLane === eventLane) {
+        if (lane.activeLane === null || lane.activeLane === eventLane) {
           setProject((prev) => prev ? { ...prev, phase: payload.phase } : prev);
         }
       }),
@@ -178,42 +146,33 @@ export function useProjectState(projectId: string) {
         setTopicDriftWarning(payload.message);
         setTimeout(() => setTopicDriftWarning(null), 8_000);
       }),
-      ws.subscribe("LanesStarted", (payload) => {
-        setLaneState({ total: payload.num_lanes, completed: [], errors: [], synthesizing: false });
-      }),
-      ws.subscribe("LaneCompleted", (payload) => {
-        setLaneState((prev) => {
-          if (!prev) return prev;
-          const completed = [...prev.completed];
-          const errors = [...prev.errors];
-          if (payload.error) {
-            if (!errors.includes(payload.lane)) errors.push(payload.lane);
-          } else {
-            if (!completed.includes(payload.lane)) completed.push(payload.lane);
-          }
-          return { ...prev, completed, errors };
-        });
-      }),
-      ws.subscribe("SynthesisStarted", () => {
-        setLaneState((prev) => prev ? { ...prev, synthesizing: true } : prev);
-      }),
       ws.subscribe("ResearchCompleted", (payload) => {
         setProject((prev) => prev ? { ...prev, status: "completed", phase: "complete" } : prev);
-        setLaneState((prev) => prev ? { ...prev, synthesizing: false } : prev);
+        lane.setLaneState((prev) => prev ? { ...prev, synthesizing: false } : prev);
         if (payload.token_usage) {
-          setTokenUsage(payload.token_usage as unknown as ProjectTokenUsage);
+          paper.setTokenUsage({
+            project_id: payload.token_usage.project_id,
+            by_model: payload.token_usage.by_model,
+            total_prompt_tokens: payload.token_usage.total_prompt_tokens,
+            total_completion_tokens: payload.token_usage.total_completion_tokens,
+            total_tokens: payload.token_usage.total_tokens,
+            total_cost_usd: payload.token_usage.total_cost_usd,
+            total_cost_rmb: payload.token_usage.total_cost_rmb,
+            total_calls: payload.token_usage.total_calls,
+          });
         } else {
-          getProjectUsage(projectId).then(setTokenUsage).catch(() => {});
+          getProjectUsage(projectId).then(paper.setTokenUsage).catch(() => {});
         }
         getExportedPaper(projectId)
-          .then((data) => setPaperContent(data.content))
+          .then((data) => paper.setPaperContent(data.content))
           .catch(() => {});
       }),
     ];
 
     return () => unsubs.forEach((fn) => fn());
-  }, [ws, projectId, activeLane]);
+  }, [ws, projectId, lane.activeLane]);
 
+  // Actions
   const handleToggleRunning = useCallback(async () => {
     if (!project || actionLoading) return;
     setActionLoading(true);
@@ -257,27 +216,8 @@ export function useProjectState(projectId: string) {
     [projectId, checkpoint]
   );
 
-  const loadCitationGraph = useCallback(async () => {
-    try {
-      const data = await getCitationGraph(projectId);
-      if (data.total_papers > 0) {
-        setCitationGraph(data);
-        return data;
-      }
-    } catch { /* no graph yet */ }
-    return null;
-  }, [projectId]);
-
-  const loadTokenUsage = useCallback(async () => {
-    try {
-      const usage = await getProjectUsage(projectId);
-      setTokenUsage(usage);
-      return usage;
-    } catch { return null; }
-  }, [projectId]);
-
   return {
-    // State
+    // Core state
     project,
     loading,
     agentEvents,
@@ -289,28 +229,22 @@ export function useProjectState(projectId: string) {
     actionLoading,
     showDeleteConfirm,
     deleting,
-    paperContent,
-    tokenUsage,
-    citationGraph,
-    laneState,
-    activeLane,
-    laneStatuses,
     ws,
     blackboard,
+
+    // Composed state (from sub-hooks)
+    ...paper,
+    ...lane,
+    ...evalData,
 
     // Setters
     setTopicDriftWarning,
     setShowDeleteConfirm,
-    setPaperContent,
-    setTokenUsage,
-    setActiveLane,
 
     // Actions
     handleToggleRunning,
     handleDelete,
     handleCheckpointResponse,
-    loadCitationGraph,
-    loadTokenUsage,
   };
 }
 

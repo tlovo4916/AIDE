@@ -101,63 +101,33 @@ async def _fetch_project_info(
     return research_topic, concurrency, config_json
 
 
-async def _create_engine(
+def _create_embedding_service(embedding_model: str | None = None):
+    """Create an EmbeddingService if an OpenRouter API key is configured."""
+    if not settings.openrouter_api_key:
+        return None
+    try:
+        from backend.knowledge.embeddings import EmbeddingService
+
+        return EmbeddingService(model=embedding_model)
+    except Exception:
+        logger.warning("[Factory] Failed to create EmbeddingService")
+        return None
+
+
+async def _create_board(
+    workspace_path: Path,
     project_id: str,
+    research_topic: str,
     *,
-    workspace_path: Path | None = None,
-    research_topic: str = "",
-    lane_index: int | None = None,
-    lane_perspective: str = "",
-    model_overrides: dict[str, str] | None = None,
-    embedding_model: str | None = None,
-) -> OrchestrationEngine:
-    """Assemble all dependencies and return a ready-to-run engine.
+    embedding_service,
+    llm_router: LLMRouter,
+    action_executor: ActionExecutor,
+    level_gen: LevelGenerator,
+):
+    """Create board/adapter: SemanticBoard (feature flag) or filesystem Blackboard.
 
-    Args:
-        project_id: The project UUID string.
-        workspace_path: Override workspace path (used for lane workspaces).
-        research_topic: Pre-fetched topic (avoids redundant DB queries for lanes).
-        lane_index: If set, this engine is for a specific lane.
-        model_overrides: Per-project/per-lane agent model overrides (from config_json).
-        embedding_model: Per-project embedding model override (from config_json).
+    Returns (board, event_bus) where event_bus is None for the Blackboard path.
     """
-    if workspace_path is None:
-        workspace_path = settings.project_path(project_id)
-
-    # Fetch research_topic from DB if not provided
-    if not research_topic:
-        research_topic, _, _ = await _fetch_project_info(project_id)
-
-    lane_label = f" lane={lane_index}" if lane_index is not None else ""
-    logger.info(
-        "[Factory] project=%s%s research_topic=%r overrides=%s",
-        project_id,
-        lane_label,
-        research_topic[:80],
-        list(model_overrides.keys()) if model_overrides else "global",
-    )
-
-    token_tracker = TokenTracker(async_session_factory)
-    llm_router = LLMRouter(tracker=token_tracker, agent_model_overrides=model_overrides)
-    action_executor = ActionExecutor()
-
-    async def llm_call(messages: list[dict[str, str]]) -> str:
-        resp = await llm_router.call(messages, model=_UTIL_MODEL)
-        return resp.content
-
-    level_gen = LevelGenerator(llm_call)
-
-    # Embedding service (used by both SemanticBoard and drift detection)
-    embedding_service = None
-    if settings.openrouter_api_key:
-        try:
-            from backend.knowledge.embeddings import EmbeddingService
-
-            embedding_service = EmbeddingService(model=embedding_model)
-        except Exception:
-            logger.warning("[Factory] Failed to create EmbeddingService")
-
-    # Board: SemanticBoard (feature flag) or filesystem Blackboard
     event_bus = None
     if settings.use_semantic_board:
         from backend.blackboard.event_bus import EventBus
@@ -180,33 +150,56 @@ async def _create_engine(
         )
 
     await board.init_workspace(research_topic=research_topic)
+    return board, event_bus
 
-    write_back_guard = WriteBackGuard(llm_call=llm_call)
 
-    # Phase 4: Adaptive planner components (feature-flagged)
-    state_analyzer = None
-    dispatch_scorer = None
-    info_service = None
-    if settings.use_adaptive_planner:
-        from backend.orchestrator.dispatch_scorer import DispatchScorer
-        from backend.orchestrator.info_request_service import InfoRequestService
-        from backend.orchestrator.state_analyzer import ResearchStateAnalyzer
+def _create_evaluator(
+    llm_router: LLMRouter,
+    project_id: str,
+    embedding_service,
+):
+    """Create an EvaluatorService if the use_multi_eval feature flag is enabled."""
+    if not settings.use_multi_eval:
+        return None
 
-        state_analyzer = ResearchStateAnalyzer(async_session_factory, str(project_id))
-        dispatch_scorer = DispatchScorer()
-        info_service = InfoRequestService(async_session_factory, str(project_id))
-        logger.info("[Factory] Adaptive planner enabled for project %s", project_id)
+    from backend.evaluation.evaluator import EvaluatorService
 
-    # Phase 3: Evaluator (created early so CriticAgent can reference it)
-    evaluator = None
-    if settings.use_multi_eval:
-        from backend.evaluation.evaluator import EvaluatorService
+    return EvaluatorService(
+        llm_router, project_id=str(project_id), embedding_service=embedding_service,
+    )
 
-        evaluator = EvaluatorService(
-            llm_router, project_id=str(project_id), embedding_service=embedding_service,
-        )
 
-    agents: dict[AgentRole, Any] = {
+def _create_adaptive_components(project_id: str):
+    """Create adaptive planner components if the use_adaptive_planner flag is enabled.
+
+    Returns (state_analyzer, dispatch_scorer, info_service).
+    """
+    if not settings.use_adaptive_planner:
+        return None, None, None
+
+    from backend.orchestrator.dispatch_scorer import DispatchScorer
+    from backend.orchestrator.info_request_service import InfoRequestService
+    from backend.orchestrator.state_analyzer import ResearchStateAnalyzer
+
+    state_analyzer = ResearchStateAnalyzer(async_session_factory, str(project_id))
+    dispatch_scorer = DispatchScorer()
+    info_service = InfoRequestService(async_session_factory, str(project_id))
+    logger.info("[Factory] Adaptive planner enabled for project %s", project_id)
+    return state_analyzer, dispatch_scorer, info_service
+
+
+def _create_agents(
+    llm_router: LLMRouter,
+    write_back_guard: WriteBackGuard,
+    project_id: str,
+    board,
+    *,
+    info_service=None,
+    evaluator=None,
+    embedding_model: str | None = None,
+) -> dict[AgentRole, Any]:
+    """Instantiate all six agents."""
+    return {
         AgentRole.DIRECTOR: DirectorAgent(
             llm_router,
             write_back_guard,
@@ -253,13 +246,40 @@ async def _create_engine(
         ),
     }
 
-    planner = OrchestratorPlanner(
+
+def _create_planner(
+    llm_router: LLMRouter,
+    research_topic: str,
+    lane_perspective: str,
+    event_bus,
+    dispatch_scorer,
+) -> OrchestratorPlanner:
+    """Create the orchestrator planner (adaptive or legacy path)."""
+    return OrchestratorPlanner(
         llm_router,
         research_topic=research_topic,
         lane_perspective=lane_perspective,
         event_bus=event_bus,
         dispatch_scorer=dispatch_scorer,
     )
+
+
+def _wire_engine(
+    project_id: str,
+    board,
+    agents: dict[AgentRole, Any],
+    planner: OrchestratorPlanner,
+    llm_router: LLMRouter,
+    token_tracker: TokenTracker,
+    *,
+    lane_index: int | None = None,
+    embedding_service=None,
+    evaluator=None,
+    state_analyzer=None,
+    info_service=None,
+    event_bus=None,
+) -> OrchestrationEngine:
+    """Final engine assembly: checkpoint, heartbeat, trend extractor, and engine wiring."""
     convergence = ConvergenceDetector()
     backtrack = BacktrackController()
 
@@ -308,6 +328,108 @@ async def _create_engine(
     engine.set_subagent_pool(subagent_pool)
 
     return engine
+
+
+async def _create_engine(
+    project_id: str,
+    *,
+    workspace_path: Path | None = None,
+    research_topic: str = "",
+    lane_index: int | None = None,
+    lane_perspective: str = "",
+    model_overrides: dict[str, str] | None = None,
+    embedding_model: str | None = None,
+) -> OrchestrationEngine:
+    """Assemble all dependencies and return a ready-to-run engine.
+
+    Args:
+        project_id: The project UUID string.
+        workspace_path: Override workspace path (used for lane workspaces).
+        research_topic: Pre-fetched topic (avoids redundant DB queries for lanes).
+        lane_index: If set, this engine is for a specific lane.
+        model_overrides: Per-project/per-lane agent model overrides (from config_json).
+        embedding_model: Per-project embedding model override (from config_json).
+    """
+    if workspace_path is None:
+        workspace_path = settings.project_path(project_id)
+
+    # Fetch research_topic from DB if not provided
+    if not research_topic:
+        research_topic, _, _ = await _fetch_project_info(project_id)
+
+    lane_label = f" lane={lane_index}" if lane_index is not None else ""
+    logger.info(
+        "[Factory] project=%s%s research_topic=%r overrides=%s",
+        project_id,
+        lane_label,
+        research_topic[:80],
+        list(model_overrides.keys()) if model_overrides else "global",
+    )
+
+    # Core services
+    token_tracker = TokenTracker(async_session_factory)
+    llm_router = LLMRouter(tracker=token_tracker, agent_model_overrides=model_overrides)
+    action_executor = ActionExecutor()
+
+    async def llm_call(messages: list[dict[str, str]]) -> str:
+        resp = await llm_router.call(messages, model=_UTIL_MODEL)
+        return resp.content
+
+    level_gen = LevelGenerator(llm_call)
+
+    # Embedding service (used by both SemanticBoard and drift detection)
+    embedding_service = _create_embedding_service(embedding_model)
+
+    # Board
+    board, event_bus = await _create_board(
+        workspace_path,
+        project_id,
+        research_topic,
+        embedding_service=embedding_service,
+        llm_router=llm_router,
+        action_executor=action_executor,
+        level_gen=level_gen,
+    )
+
+    write_back_guard = WriteBackGuard(llm_call=llm_call)
+
+    # Phase 4: Adaptive planner components (feature-flagged)
+    state_analyzer, dispatch_scorer, info_service = _create_adaptive_components(project_id)
+
+    # Phase 3: Evaluator
+    evaluator = _create_evaluator(llm_router, project_id, embedding_service)
+
+    # Agents
+    agents = _create_agents(
+        llm_router,
+        write_back_guard,
+        project_id,
+        board,
+        info_service=info_service,
+        evaluator=evaluator,
+        embedding_model=embedding_model,
+    )
+
+    # Planner
+    planner = _create_planner(
+        llm_router, research_topic, lane_perspective, event_bus, dispatch_scorer,
+    )
+
+    # Wire everything into the engine
+    return _wire_engine(
+        project_id,
+        board,
+        agents,
+        planner,
+        llm_router,
+        token_tracker,
+        lane_index=lane_index,
+        embedding_service=embedding_service,
+        evaluator=evaluator,
+        state_analyzer=state_analyzer,
+        info_service=info_service,
+        event_bus=event_bus,
+    )
 
 
 async def _update_project_status(project_id: str, status: str) -> None:

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
+
+from backend.protocols import LLMRouter
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +51,6 @@ _TREND_PROMPT = """\
 
 仅返回 JSON，不要其他内容。
 """
-
-
-@runtime_checkable
-class LLMRouter(Protocol):
-    async def generate(
-        self, model: str, prompt: str, *, system_prompt: str | None = None
-    ) -> str: ...
 
 
 class TrendExtractor:

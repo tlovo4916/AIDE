@@ -18,6 +18,7 @@ export interface CheckpointCreatedPayload {
   phase: string;
   summary: string;
   options: { label: string; value: string }[];
+  lane_index?: number;
 }
 
 export interface CheckpointResolvedPayload {
@@ -28,6 +29,7 @@ export interface CheckpointResolvedPayload {
 export interface PhaseAdvancedPayload {
   from_phase: string;
   phase: string;
+  lane_index?: number;
 }
 
 export interface BacktrackPayload {
@@ -41,6 +43,7 @@ export interface AgentActivityPayload {
   action: string;
   timestamp: string;
   metadata?: Record<string, unknown>;
+  lane_index?: number;
 }
 
 export interface SubAgentSpawnedPayload {
@@ -59,11 +62,13 @@ export interface ChallengeRaisedPayload {
   from: string;
   target: string;
   message: string;
+  lane_index?: number;
 }
 
 export interface ChallengeResolvedPayload {
   id: string;
   resolution: string;
+  lane_index?: number;
 }
 
 export interface ArtifactUpdatedPayload {
@@ -71,6 +76,10 @@ export interface ArtifactUpdatedPayload {
   artifact_id: string;
   action: "created" | "updated" | "deleted";
   data: Record<string, unknown>;
+  quality_score?: number;
+  embedding_status?: "pending" | "completed" | "failed";
+  relations?: { target_id: string; relation_type: string }[];
+  lane_index?: number;
 }
 
 export interface AgentStartedPayload {
@@ -79,6 +88,7 @@ export interface AgentStartedPayload {
   phase: string;
   iteration: number;
   timestamp: string;
+  lane_index?: number;
 }
 
 export interface AgentErrorPayload {
@@ -131,6 +141,23 @@ export interface SynthesisStartedPayload {
   num_lanes: number;
 }
 
+export interface EvaluationCompletedPayload {
+  iteration: number;
+  phase: string;
+  composite_score: number;
+  dimensions: Record<string, number>;
+  evaluator_model: string;
+  information_gain?: number;
+}
+
+export interface PlannerDecisionPayload {
+  iteration: number;
+  phase: string;
+  chosen_agent: string;
+  rationale: string;
+  candidates: { agent: string; score: number }[];
+}
+
 // Union of all push event names
 export type WSPushEvent =
   | "CheckpointCreated"
@@ -149,7 +176,9 @@ export type WSPushEvent =
   | "ResearchCompleted"
   | "LanesStarted"
   | "LaneCompleted"
-  | "SynthesisStarted";
+  | "SynthesisStarted"
+  | "EvaluationCompleted"
+  | "PlannerDecision";
 
 export type WSPushPayloadMap = {
   CheckpointCreated: CheckpointCreatedPayload;
@@ -169,4 +198,6 @@ export type WSPushPayloadMap = {
   LanesStarted: LanesStartedPayload;
   LaneCompleted: LaneCompletedPayload;
   SynthesisStarted: SynthesisStartedPayload;
+  EvaluationCompleted: EvaluationCompletedPayload;
+  PlannerDecision: PlannerDecisionPayload;
 };

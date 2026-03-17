@@ -7,9 +7,10 @@ import json
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 from backend.config import settings
+from backend.protocols import Board, LLMRouter
 from backend.types import AgentRole, SubAgentRequest, SubAgentResult
 
 logger = logging.getLogger(__name__)
@@ -18,25 +19,8 @@ _DEFAULT_TIMEOUT = 300.0  # 5 minutes
 _SUBAGENT_MODEL = "deepseek-chat"
 
 
-@runtime_checkable
-class LLMRouter(Protocol):
-    async def generate(
-        self,
-        model: str,
-        prompt: str,
-        *,
-        system_prompt: str | None = None,
-        project_id: str | None = None,
-        agent_role: AgentRole | None = None,
-    ) -> str: ...
-
-
 class ContextBuilder(Protocol):
     async def build(self, role: AgentRole, task: str) -> str: ...
-
-
-class Board(Protocol):
-    async def get_state_summary(self) -> str: ...
 
 
 # -----------------------------------------------------------------------

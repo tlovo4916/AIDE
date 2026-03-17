@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Protocol
 
 from backend.config import settings
+from backend.protocols import Board
 from backend.types import ArtifactType, ConvergenceSignals, ResearchPhase
 
 logger = logging.getLogger(__name__)
@@ -41,18 +41,6 @@ _PHASE_REQUIRED_ARTIFACTS: dict[ResearchPhase, set[ArtifactType]] = {
 def get_phase_required_artifacts(phase: ResearchPhase) -> set[ArtifactType]:
     """Return the set of artifact types required for a phase to converge."""
     return _PHASE_REQUIRED_ARTIFACTS.get(phase, set())
-
-
-class Board(Protocol):
-    async def get_open_challenge_count(self) -> int: ...
-    async def get_phase_critic_score(self, phase: ResearchPhase) -> float: ...
-    async def get_recent_revision_count(self, rounds: int) -> int: ...
-    async def get_phase_iteration_count(self, phase: ResearchPhase) -> int: ...
-    async def list_artifacts(
-        self,
-        artifact_type: ArtifactType,
-        include_superseded: bool = False,
-    ) -> list[Any]: ...
 
 
 class ConvergenceDetector:

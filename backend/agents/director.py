@@ -26,40 +26,34 @@ class DirectorAgent(BaseAgent):
 
     async def pre_execute(self, context: str, task: AgentTask) -> str:
         """Build research map from board artifacts (not regex)."""
-        lines: list[str] = []
+        lines = await self._build_artifact_summary(
+            [
+                (ArtifactType.DIRECTIONS, "Directions"),
+                (ArtifactType.HYPOTHESES, "Hypotheses"),
+                (ArtifactType.EVIDENCE_FINDINGS, "Evidence"),
+                (ArtifactType.REVIEW, "Reviews"),
+            ],
+            "Research Map",
+        )
 
-        # Query board for actual artifacts
-        if self._board:
-            try:
-                directions = await self._board.list_artifacts(ArtifactType.DIRECTIONS)
-                hypotheses = await self._board.list_artifacts(ArtifactType.HYPOTHESES)
-                evidence = await self._board.list_artifacts(ArtifactType.EVIDENCE_FINDINGS)
-                reviews = await self._board.list_artifacts(ArtifactType.REVIEW)
-
-                lines.append("\n## Research Map (from board)")
-                lines.append(f"  Directions: {len(directions)} artifact(s)")
-                lines.append(f"  Hypotheses: {len(hypotheses)} artifact(s)")
-                lines.append(f"  Evidence: {len(evidence)} artifact(s)")
-                lines.append(f"  Reviews: {len(reviews)} artifact(s)")
-
-                # Extract RQs from direction artifacts
-                rq_pattern = re.compile(
-                    r"(?:RQ\d+|Research Question \d+|研究问题\s*\d+)[:\s]*(.*)",
-                    re.I,
-                )
-                rq_list: list[str] = []
-                for d in directions[-3:]:  # last 3 directions
-                    text = d if isinstance(d, str) else str(d)
-                    rq_list.extend(rq_pattern.findall(text))
-                if rq_list:
-                    lines.append("  Current Research Questions:")
-                    for i, rq in enumerate(rq_list[:10], 1):
-                        lines.append(f"    RQ{i}: {rq.strip()[:200]}")
-            except Exception as exc:
-                logger.debug("[Director] Board query failed: %s", exc)
+        if lines:
+            # Extract RQs from direction artifacts
+            directions = await self._query_board(ArtifactType.DIRECTIONS)
+            rq_pattern = re.compile(
+                r"(?:RQ\d+|Research Question \d+|研究问题\s*\d+)[:\s]*(.*)",
+                re.I,
+            )
+            rq_list: list[str] = []
+            for d in directions[-3:]:  # last 3 directions
+                text = d if isinstance(d, str) else str(d)
+                rq_list.extend(rq_pattern.findall(text))
+            if rq_list:
+                lines.append("  Current Research Questions:")
+                for i, rq in enumerate(rq_list[:10], 1):
+                    lines.append(f"    RQ{i}: {rq.strip()[:200]}")
 
         # Fallback: regex scan context if board unavailable or returned empty
-        if len(lines) <= 1:
+        if not lines:
             rq_pattern = re.compile(
                 r"(?:RQ\d+|Research Question \d+|研究问题\s*\d+)[:\s]*(.*)", re.I
             )

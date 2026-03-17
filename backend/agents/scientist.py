@@ -37,41 +37,38 @@ class ScientistAgent(BaseAgent):
 
     async def pre_execute(self, context: str, task: AgentTask) -> str:
         """Build hypothesis registry from board artifacts."""
-        lines: list[str] = []
+        lines = await self._build_artifact_summary(
+            [
+                (ArtifactType.HYPOTHESES, "Hypotheses"),
+                (ArtifactType.EVIDENCE_FINDINGS, "Evidence"),
+            ],
+            "Hypothesis Registry",
+        )
 
-        # Query board for actual hypothesis and evidence artifacts
-        if self._board:
-            try:
-                hypotheses = await self._board.list_artifacts(ArtifactType.HYPOTHESES)
-                evidence = await self._board.list_artifacts(ArtifactType.EVIDENCE_FINDINGS)
+        if lines:
+            hypotheses = await self._query_board(ArtifactType.HYPOTHESES)
+            evidence = await self._query_board(ArtifactType.EVIDENCE_FINDINGS)
 
-                if hypotheses:
-                    lines.append("\n## Hypothesis Registry (from board)")
-                    lines.append(f"  Total hypotheses: {len(hypotheses)}")
-                    lines.append(f"  Total evidence: {len(evidence)}")
-
-                    hyp_pattern = re.compile(
-                        r"(?:H(\d+)|Hypothesis\s*(\d+)|假设\s*(\d+))[:\s]*(.*?)(?:\n|$)",
-                        re.I,
+            hyp_pattern = re.compile(
+                r"(?:H(\d+)|Hypothesis\s*(\d+)|假设\s*(\d+))[:\s]*(.*?)(?:\n|$)",
+                re.I,
+            )
+            for h in hypotheses[-5:]:  # last 5
+                text = h if isinstance(h, str) else str(h)
+                matches = hyp_pattern.findall(text)
+                for m in matches[:5]:
+                    num = m[0] or m[1] or m[2]
+                    desc = m[3].strip()[:200]
+                    # Check evidence artifacts for support
+                    ev_refs = 0
+                    for e in evidence:
+                        ev_text = e if isinstance(e, str) else str(e)
+                        if f"H{num}" in ev_text or desc[:30] in ev_text:
+                            ev_refs += 1
+                    status = "supported" if ev_refs > 0 else "unsupported"
+                    lines.append(
+                        f"  H{num}: [{status}] (evidence: {ev_refs}) {desc}"
                     )
-                    for h in hypotheses[-5:]:  # last 5
-                        text = h if isinstance(h, str) else str(h)
-                        matches = hyp_pattern.findall(text)
-                        for m in matches[:5]:
-                            num = m[0] or m[1] or m[2]
-                            desc = m[3].strip()[:200]
-                            # Check evidence artifacts for support
-                            ev_refs = 0
-                            for e in evidence:
-                                ev_text = e if isinstance(e, str) else str(e)
-                                if f"H{num}" in ev_text or desc[:30] in ev_text:
-                                    ev_refs += 1
-                            status = "supported" if ev_refs > 0 else "unsupported"
-                            lines.append(
-                                f"  H{num}: [{status}] (evidence: {ev_refs}) {desc}"
-                            )
-            except Exception as exc:
-                logger.debug("[Scientist] Board query failed: %s", exc)
 
         # Fallback: regex scan context
         if not lines:

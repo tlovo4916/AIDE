@@ -7,7 +7,6 @@ import json
 import logging
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, Protocol
 
 from backend.agents.base import BaseAgent
@@ -18,13 +17,13 @@ from backend.orchestrator.backtrack import BacktrackController
 from backend.orchestrator.convergence import ConvergenceDetector, get_phase_required_artifacts
 from backend.orchestrator.heartbeat import HeartbeatMonitor
 from backend.orchestrator.planner import OrchestratorPlanner
+from backend.protocols import Board
 from backend.types import (
     ActionType,
     AgentRole,
     AgentTask,
     ArtifactType,
     BlackboardAction,
-    ChallengeRecord,
     CheckpointAction,
     ContextLevel,
     OrchestratorDecision,
@@ -34,43 +33,13 @@ from backend.types import (
 # Auto-dismiss challenges that have been open longer than this many phase iterations
 _CHALLENGE_AUTO_DISMISS_AFTER = 5
 
+# Max pending InfoRequests / challenges injected into a single agent dispatch
+_MAX_INJECTED_REQUESTS = 10
+
 logger = logging.getLogger(__name__)
 
 WSBroadcast = Callable[[str, dict[str, Any]], Coroutine[Any, Any, None]]
 PhaseChangeCallback = Callable[[str], Coroutine[Any, Any, None]]  # receives new phase value
-
-
-class Board(Protocol):
-    """Minimal blackboard interface expected by the orchestration engine."""
-
-    async def get_state_summary(
-        self,
-        level: ContextLevel,
-        relevant_types: set[ArtifactType] | None = None,
-    ) -> str: ...
-    async def list_artifacts(
-        self, artifact_type: ArtifactType, include_superseded: bool = False
-    ) -> list: ...
-    async def apply_action(self, action: BlackboardAction) -> None: ...
-    async def dedup_check(self, actions: list[BlackboardAction]) -> list[BlackboardAction]: ...
-    async def get_open_challenges(self) -> list[ChallengeRecord]: ...
-    async def get_open_challenge_count(self) -> int: ...
-    async def get_phase_critic_score(self, phase: ResearchPhase) -> float: ...
-    async def set_phase_critic_score(self, phase: ResearchPhase, score: float) -> None: ...
-    async def get_recent_revision_count(self, rounds: int) -> int: ...
-    async def get_phase_iteration_count(self, phase: ResearchPhase) -> int: ...
-    async def increment_phase_iteration(self, phase: ResearchPhase) -> int: ...
-    async def get_artifacts_since_phase(self, phase: ResearchPhase) -> list[str]: ...
-    async def mark_superseded(self, artifact_id: str) -> None: ...
-    async def update_meta(self, key: str, value: object) -> None: ...
-    async def get_project_meta(self) -> dict[str, Any]: ...
-    async def has_contradictory_evidence(self) -> bool: ...
-    async def has_logic_gaps(self) -> bool: ...
-    async def has_direction_issues(self) -> bool: ...
-    async def serialize(self) -> dict[str, Any]: ...
-    def get_project_path(self) -> Path: ...
-    async def resolve_challenge(self, challenge_id: str, resolution: str) -> None: ...
-    async def export_paper(self) -> Any: ...
 
 
 class CheckpointManager(Protocol):
@@ -179,6 +148,14 @@ class OrchestrationEngine:
     # Main loop
     # ------------------------------------------------------------------
 
+    class _InvokeResult:
+        """Container for the results of agent invocation and action application."""
+
+        __slots__ = ("artifact_updates",)
+
+        def __init__(self, artifact_updates: list[dict[str, Any]]) -> None:
+            self.artifact_updates = artifact_updates
+
     async def run(self) -> None:
         self._running = True
 
@@ -231,72 +208,8 @@ class OrchestrationEngine:
                     self._project_id,
                 )
 
-                # 1. Assess blackboard state (planner gets full panoramic view)
-                logger.info("[Engine] Building state summary...")
-                summary = await self._build_state_summary(self._board, role=None)
-                logger.info("[Engine] State summary length: %d chars", len(summary))
-
-                # 1b. Per-iteration on-topic check (log warning if research seems to drift)
-                if self._research_topic and self._iteration > 1:
-                    await self._check_on_topic(summary)
-
-                # 2. Adaptive state analysis (feature-flagged)
-                research_state = None
-                if self._state_analyzer:
-                    try:
-                        pending_requests: dict[str, int] = {}
-                        if self._info_service:
-                            pending_requests = (
-                                await self._info_service.get_pending_count_by_responder()
-                            )
-                        hist = self._planner._selection_history.get(
-                            self._phase.value, []
-                        )
-                        research_state = await self._state_analyzer.analyze(
-                            self._board,
-                            self._phase,
-                            self._iteration,
-                            selection_history=hist,
-                            pending_requests=pending_requests,
-                            eval_composite=self._last_eval_composite,
-                            info_gain=self._last_info_gain,
-                            is_diminishing=self._last_is_diminishing,
-                            topic_drift=self._topic_drift_detected,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "[Engine] State analysis failed (non-fatal), "
-                            "falling back to standard planner"
-                        )
-
-                # 2b. Plan next action (compute missing artifacts for coverage loop)
-                logger.info("[Engine] Calling planner...")
-                open_challenges = await self._board.get_open_challenges()
-                required = get_phase_required_artifacts(self._phase)
-                missing: list[ArtifactType] = []
-                for at in required:
-                    arts = await self._board.list_artifacts(at)
-                    if not arts:
-                        missing.append(at)
-                if missing:
-                    logger.info(
-                        "[Engine] Missing artifacts for %s: %s",
-                        self._phase.value,
-                        [at.value for at in missing],
-                    )
-                decision = await self._planner.plan_next_action(
-                    summary,
-                    self._phase,
-                    self._iteration,
-                    open_challenges=open_challenges or None,
-                    missing_artifact_types=missing or None,
-                    research_state=research_state,
-                )
-                logger.info(
-                    "[Engine] Planner decided: agent=%s, task=%s",
-                    decision.agent_to_invoke.value,
-                    decision.task_description[:100],
-                )
+                # 1-2. Assess state + plan next action
+                summary, decision = await self._assess_and_plan()
 
                 # 3. Checkpoint gate
                 if decision.trigger_checkpoint:
@@ -315,163 +228,25 @@ class OrchestrationEngine:
                     if user_action == CheckpointAction.ADJUST:
                         continue
 
-                # 4. Backtrack if requested
+                # 4. Backtrack if requested by planner
                 if decision.backtrack_to:
-                    prev_phase = self._phase
-                    await self._backtrack.execute_backtrack(self._board, decision.backtrack_to)
-                    self._phase = decision.backtrack_to
-                    await self._ws_broadcast(
-                        "Backtrack",
-                        {
-                            "from_phase": prev_phase.value,
-                            "to_phase": self._phase.value,
-                            "reason": "planned",
-                        },
-                    )
+                    await self._handle_backtrack(decision.backtrack_to, reason="planned")
                     continue
 
-                # 5. 通知前端 agent 已开始（立即反馈）
-                await self._ws_broadcast(
-                    "AgentStarted",
-                    {
-                        "agent": decision.agent_to_invoke.value,
-                        "task": decision.task_description[:200],
-                        "phase": self._phase.value,
-                        "iteration": self._iteration,
-                        "timestamp": datetime.now(UTC).isoformat(),
-                    },
-                )
-
-                # 6. Dispatch agent -> get actions (带总超时，防止 LLM 调用永久挂起)
-                try:
-                    actions = await asyncio.wait_for(self._dispatch_agent(decision), timeout=300.0)
-                except TimeoutError:
-                    logger.error(
-                        "[Engine] Agent %s timed out after 300s on iteration %d",
-                        decision.agent_to_invoke.value,
-                        self._iteration,
-                    )
-                    await self._ws_broadcast(
-                        "AgentError",
-                        {
-                            "agent": decision.agent_to_invoke.value,
-                            "error": "Agent timed out after 300s",
-                            "iteration": self._iteration,
-                        },
-                    )
-                    # Still count the iteration to prevent infinite loops on repeated timeouts
-                    await self._board.increment_phase_iteration(self._phase)
+                # 5-7. Dispatch agent, apply actions, broadcast results
+                result = await self._invoke_and_apply(decision)
+                if result is None:
+                    # Agent timed out; iteration already counted
                     continue
 
-                # 7. Dedup check
-                actions = await self._board.dedup_check(actions)
-
-                # Write validated actions to blackboard
-                artifact_updates: list[dict[str, Any]] = []
-                for action in actions:
-                    try:
-                        await self._board.apply_action(action)
-                    except Exception as act_err:
-                        logger.warning(
-                            "[Engine] Skipping action %s from %s: %s",
-                            action.action_type.value,
-                            action.agent_role.value,
-                            act_err,
-                        )
-                        continue
-                    if action.action_type == ActionType.WRITE_ARTIFACT:
-                        artifact_updates.append(
-                            {
-                                "artifact_type": action.content.get("artifact_type", action.target),
-                                "artifact_id": action.content.get("artifact_id", ""),
-                                "action": "created",
-                                "data": action.content,
-                            }
-                        )
-                        # Use agent_role instead of artifact_type string to
-                        # reliably detect critic reviews (LLM often omits or
-                        # mangles the artifact_type field).
-                        if action.agent_role == AgentRole.CRITIC:
-                            score = self._extract_critic_score(action.content)
-                            if score is not None:
-                                await self._board.set_phase_critic_score(self._phase, score)
-                                logger.info(
-                                    "[Engine] Phase %s critic score updated to %.1f",
-                                    self._phase.value,
-                                    score,
-                                )
-
-                await self._ws_broadcast(
-                    "AgentActivity",
-                    {
-                        "agent": decision.agent_to_invoke.value,
-                        "action": decision.task_description[:200],
-                        "timestamp": datetime.now(UTC).isoformat(),
-                        "metadata": {
-                            "iteration": self._iteration,
-                            "actions": len(actions),
-                            "phase": self._phase.value,
-                        },
-                    },
-                )
-                for upd in artifact_updates:
-                    await self._ws_broadcast("ArtifactUpdated", upd)
-
-                # 7b. Trend extraction
-                await self._maybe_extract_trends()
-
-                # 7c. Coverage gap detection (semantic board only)
-                if hasattr(self._board, "compute_coverage"):
-                    from backend.config import settings as _cfg
-
-                    if self._iteration % _cfg.coverage_recompute_interval == 0:
-                        try:
-                            ks = await self._board.compute_coverage()
-                            if ks and ks.gap_descriptions:
-                                await self._board.update_meta("coverage_gaps", ks.gap_descriptions)
-                        except Exception:
-                            logger.warning("[Engine] Coverage computation failed (non-fatal)")
-
-                # 7d. Per-iteration evaluation (feature-flagged)
-                await self._maybe_evaluate_iteration(artifact_updates)
+                # 7b-7d. Trend extraction, coverage gaps, evaluation
+                await self._run_evaluation_cycle(result.artifact_updates)
 
                 # 8. Handle challenges
                 await self._handle_challenges(self._board)
 
-                # 9. Convergence check
-                await self._board.increment_phase_iteration(self._phase)
-                signals = await self._convergence.check(
-                    self._board,
-                    self._phase,
-                    eval_composite=self._last_eval_composite,
-                    information_gain=self._last_info_gain,
-                    is_diminishing=self._last_is_diminishing,
-                )
-
-                backtrack_to = await self._backtrack.should_backtrack(
-                    self._board, self._phase, signals
-                )
-                if backtrack_to:
-                    prev_phase = self._phase
-                    await self._backtrack.execute_backtrack(self._board, backtrack_to)
-                    self._phase = backtrack_to
-                    await self._ws_broadcast(
-                        "Backtrack",
-                        {
-                            "from_phase": prev_phase.value,
-                            "to_phase": self._phase.value,
-                            "reason": "auto",
-                        },
-                    )
-                elif signals.is_converged:
-                    self._phase = await self._advance_phase(self._board, self._phase)
-
-                logger.info(
-                    "Iteration %d | phase=%s | converged=%s",
-                    self._iteration,
-                    self._phase.value,
-                    signals.is_converged,
-                )
+                # 9. Convergence check + phase transition / backtrack
+                await self._check_phase_transition()
 
         except Exception:
             logger.exception("Orchestration loop failed at iteration %d", self._iteration)
@@ -487,6 +262,295 @@ class OrchestrationEngine:
 
     def stop(self) -> None:
         self._running = False
+
+    # ------------------------------------------------------------------
+    # Run-loop sub-methods (extracted from run() for readability)
+    # ------------------------------------------------------------------
+
+    async def _assess_and_plan(self) -> tuple[str, OrchestratorDecision]:
+        """Assess blackboard state, run on-topic check, and plan next action.
+
+        Returns the state summary string and the planner's decision.
+        """
+        # 1. Assess blackboard state (planner gets full panoramic view)
+        logger.info("[Engine] Building state summary...")
+        summary = await self._build_state_summary(self._board, role=None)
+        logger.info("[Engine] State summary length: %d chars", len(summary))
+
+        # 1b. Per-iteration on-topic check (log warning if research seems to drift)
+        if self._research_topic and self._iteration > 1:
+            await self._check_on_topic(summary)
+
+        # 2. Adaptive state analysis (feature-flagged)
+        research_state = None
+        if self._state_analyzer:
+            try:
+                pending_requests: dict[str, int] = {}
+                if self._info_service:
+                    pending_requests = (
+                        await self._info_service.get_pending_count_by_responder()
+                    )
+                hist = self._planner._selection_history.get(
+                    self._phase.value, []
+                )
+                research_state = await self._state_analyzer.analyze(
+                    self._board,
+                    self._phase,
+                    self._iteration,
+                    selection_history=hist,
+                    pending_requests=pending_requests,
+                    eval_composite=self._last_eval_composite,
+                    info_gain=self._last_info_gain,
+                    is_diminishing=self._last_is_diminishing,
+                    topic_drift=self._topic_drift_detected,
+                )
+            except Exception:
+                logger.warning(
+                    "[Engine] State analysis failed (non-fatal), "
+                    "falling back to standard planner"
+                )
+
+        # 2b. Plan next action (compute missing artifacts for coverage loop)
+        logger.info("[Engine] Calling planner...")
+        open_challenges = await self._board.get_open_challenges()
+        required = get_phase_required_artifacts(self._phase)
+        missing: list[ArtifactType] = []
+        for at in required:
+            arts = await self._board.list_artifacts(at)
+            if not arts:
+                missing.append(at)
+        if missing:
+            logger.info(
+                "[Engine] Missing artifacts for %s: %s",
+                self._phase.value,
+                [at.value for at in missing],
+            )
+        decision = await self._planner.plan_next_action(
+            summary,
+            self._phase,
+            self._iteration,
+            open_challenges=open_challenges or None,
+            missing_artifact_types=missing or None,
+            research_state=research_state,
+        )
+        logger.info(
+            "[Engine] Planner decided: agent=%s, task=%s",
+            decision.agent_to_invoke.value,
+            decision.task_description[:100],
+        )
+
+        # 2c. Broadcast planner decision for frontend timeline
+        await self._ws_broadcast(
+            "PlannerDecision",
+            {
+                "iteration": self._iteration,
+                "phase": self._phase.value,
+                "chosen_agent": decision.agent_to_invoke.value,
+                "rationale": decision.rationale or "",
+                "candidates": decision.candidate_scores or [],
+            },
+        )
+
+        return summary, decision
+
+    async def _invoke_and_apply(
+        self, decision: OrchestratorDecision
+    ) -> _InvokeResult | None:
+        """Dispatch an agent, apply its actions to the board, and broadcast results.
+
+        Returns an _InvokeResult on success, or None if the agent timed out.
+        """
+        # 5. Notify frontend that agent has started
+        await self._ws_broadcast(
+            "AgentStarted",
+            {
+                "agent": decision.agent_to_invoke.value,
+                "task": decision.task_description[:200],
+                "phase": self._phase.value,
+                "iteration": self._iteration,
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+        )
+
+        # 6. Dispatch agent -> get actions (with timeout to prevent permanent hang)
+        try:
+            actions = await asyncio.wait_for(
+                self._dispatch_agent(decision), timeout=300.0
+            )
+        except TimeoutError:
+            logger.error(
+                "[Engine] Agent %s timed out after 300s on iteration %d",
+                decision.agent_to_invoke.value,
+                self._iteration,
+            )
+            await self._ws_broadcast(
+                "AgentError",
+                {
+                    "agent": decision.agent_to_invoke.value,
+                    "error": "Agent timed out after 300s",
+                    "iteration": self._iteration,
+                },
+            )
+            # Still count the iteration to prevent infinite loops on repeated timeouts
+            await self._board.increment_phase_iteration(self._phase)
+            return None
+
+        # 7. Dedup + apply actions + broadcast
+        artifact_updates = await self._apply_actions_to_board(actions, decision)
+        return self._InvokeResult(artifact_updates=artifact_updates)
+
+    async def _apply_actions_to_board(
+        self,
+        actions: list[BlackboardAction],
+        decision: OrchestratorDecision,
+    ) -> list[dict[str, Any]]:
+        """Dedup, apply actions to the board, extract critic scores, and broadcast.
+
+        Returns the list of artifact update dicts for downstream use.
+        """
+        actions = await self._board.dedup_check(actions)
+
+        artifact_updates: list[dict[str, Any]] = []
+        for action in actions:
+            try:
+                await self._board.apply_action(action)
+            except Exception as act_err:
+                logger.warning(
+                    "[Engine] Skipping action %s from %s: %s",
+                    action.action_type.value,
+                    action.agent_role.value,
+                    act_err,
+                )
+                continue
+            if action.action_type == ActionType.WRITE_ARTIFACT:
+                upd_payload: dict[str, Any] = {
+                    "artifact_type": action.content.get(
+                        "artifact_type", action.target
+                    ),
+                    "artifact_id": action.content.get("artifact_id", ""),
+                    "action": "created",
+                    "data": action.content,
+                }
+                # Optional enrichment fields
+                qs = action.content.get("quality_score")
+                if qs is not None:
+                    try:
+                        upd_payload["quality_score"] = float(qs)
+                    except (TypeError, ValueError):
+                        pass
+                if self._embedding_service is not None:
+                    upd_payload["embedding_status"] = "pending"
+                rels = action.content.get("relations")
+                if isinstance(rels, list) and rels:
+                    upd_payload["relations"] = [
+                        {
+                            "target_id": str(r.get("target_id", "")),
+                            "relation_type": str(
+                                r.get("relation_type", "")
+                            ),
+                        }
+                        for r in rels
+                        if isinstance(r, dict)
+                    ]
+                artifact_updates.append(upd_payload)
+                # Use agent_role instead of artifact_type string to
+                # reliably detect critic reviews (LLM often omits or
+                # mangles the artifact_type field).
+                if action.agent_role == AgentRole.CRITIC:
+                    score = self._extract_critic_score(action.content)
+                    if score is not None:
+                        await self._board.set_phase_critic_score(self._phase, score)
+                        logger.info(
+                            "[Engine] Phase %s critic score updated to %.1f",
+                            self._phase.value,
+                            score,
+                        )
+
+        await self._ws_broadcast(
+            "AgentActivity",
+            {
+                "agent": decision.agent_to_invoke.value,
+                "action": decision.task_description[:200],
+                "timestamp": datetime.now(UTC).isoformat(),
+                "metadata": {
+                    "iteration": self._iteration,
+                    "actions": len(actions),
+                    "phase": self._phase.value,
+                },
+            },
+        )
+        for upd in artifact_updates:
+            await self._ws_broadcast("ArtifactUpdated", upd)
+
+        return artifact_updates
+
+    async def _run_evaluation_cycle(
+        self, artifact_updates: list[dict[str, Any]]
+    ) -> None:
+        """Run trend extraction, coverage gap detection, and per-iteration evaluation."""
+        # 7b. Trend extraction
+        await self._maybe_extract_trends()
+
+        # 7c. Coverage gap detection (semantic board only)
+        if hasattr(self._board, "compute_coverage"):
+            from backend.config import settings as _cfg
+
+            if _cfg.coverage_recompute_interval > 0 and self._iteration % _cfg.coverage_recompute_interval == 0:
+                try:
+                    ks = await self._board.compute_coverage()
+                    if ks and ks.gap_descriptions:
+                        await self._board.update_meta(
+                            "coverage_gaps", ks.gap_descriptions
+                        )
+                except Exception:
+                    logger.warning(
+                        "[Engine] Coverage computation failed (non-fatal)"
+                    )
+
+        # 7d. Per-iteration evaluation (feature-flagged)
+        await self._maybe_evaluate_iteration(artifact_updates)
+
+    async def _check_phase_transition(self) -> None:
+        """Check convergence, trigger backtrack or phase advancement as needed."""
+        await self._board.increment_phase_iteration(self._phase)
+        signals = await self._convergence.check(
+            self._board,
+            self._phase,
+            eval_composite=self._last_eval_composite,
+            information_gain=self._last_info_gain,
+            is_diminishing=self._last_is_diminishing,
+        )
+
+        backtrack_to = await self._backtrack.should_backtrack(
+            self._board, self._phase, signals
+        )
+        if backtrack_to:
+            await self._handle_backtrack(backtrack_to, reason="auto")
+        elif signals.is_converged:
+            self._phase = await self._advance_phase(self._board, self._phase)
+
+        logger.info(
+            "Iteration %d | phase=%s | converged=%s",
+            self._iteration,
+            self._phase.value,
+            signals.is_converged,
+        )
+
+    async def _handle_backtrack(
+        self, backtrack_to: ResearchPhase, reason: str
+    ) -> None:
+        """Execute a backtrack to the given phase and broadcast the event."""
+        prev_phase = self._phase
+        await self._backtrack.execute_backtrack(self._board, backtrack_to)
+        self._phase = backtrack_to
+        await self._ws_broadcast(
+            "Backtrack",
+            {
+                "from_phase": prev_phase.value,
+                "to_phase": self._phase.value,
+                "reason": reason,
+            },
+        )
 
     # ------------------------------------------------------------------
     # Agent dispatch
@@ -521,7 +585,7 @@ class OrchestrationEngine:
                 )
                 if cached_pending:
                     req_lines = ["\n\n[PENDING INFO REQUESTS — please address these]"]
-                    for req in cached_pending[:3]:
+                    for req in cached_pending[:_MAX_INJECTED_REQUESTS]:
                         req_lines.append(
                             f"From {req['requester']}: {req['question'][:300]}"
                         )
@@ -537,7 +601,7 @@ class OrchestrationEngine:
         ]
         if agent_challenges:
             ch_lines = ["\n\n[PENDING CHALLENGES — YOU MUST ADDRESS THESE]"]
-            for ch in agent_challenges[:3]:
+            for ch in agent_challenges[:_MAX_INJECTED_REQUESTS]:
                 ch_lines.append(f"Challenge from {ch.challenger.value}: {ch.argument[:300]}")
             ch_lines.append(
                 "You MUST include RESOLVE_CHALLENGE actions in your response "
@@ -589,7 +653,7 @@ class OrchestrationEngine:
                     if response.reasoning_summary
                     else "(agent produced output)"
                 )
-                for req in cached_pending[:3]:
+                for req in cached_pending[:_MAX_INJECTED_REQUESTS]:
                     await self._info_service.respond(req["request_id"], resp_text)
             except Exception:
                 logger.debug("[Engine] InfoRequest response marking failed (non-fatal)")
@@ -807,7 +871,7 @@ class OrchestrationEngine:
             return
         if self._phase not in (ResearchPhase.EXPLORE, ResearchPhase.EVIDENCE):
             return
-        if self._iteration % cfg.trend_extraction_interval != 0:
+        if cfg.trend_extraction_interval <= 0 or self._iteration % cfg.trend_extraction_interval != 0:
             return
 
         logger.info("[Engine] Running trend extraction at iteration %d", self._iteration)
@@ -833,15 +897,15 @@ class OrchestrationEngine:
                 context_level=ContextLevel.L1,
             )
             await self._board.apply_action(action)
-            await self._ws_broadcast(
-                "ArtifactUpdated",
-                {
-                    "artifact_type": ArtType.TREND_SIGNALS.value,
-                    "artifact_id": f"trends-iter-{self._iteration}",
-                    "action": "created",
-                    "data": result,
-                },
-            )
+            trend_upd: dict[str, Any] = {
+                "artifact_type": ArtType.TREND_SIGNALS.value,
+                "artifact_id": f"trends-iter-{self._iteration}",
+                "action": "created",
+                "data": result,
+            }
+            if self._embedding_service is not None:
+                trend_upd["embedding_status"] = "pending"
+            await self._ws_broadcast("ArtifactUpdated", trend_upd)
             logger.info(
                 "[Engine] Trend signals extracted: %d trends, %d entities",
                 len(result.get("trends", [])),
@@ -860,7 +924,9 @@ class OrchestrationEngine:
 
         if self._evaluator and cfg.use_multi_eval:
             try:
-                evaluation = await self._evaluator.evaluate_phase(board, current_phase)
+                evaluation = await self._evaluator.evaluate_phase(
+                    board, current_phase, iteration=self._iteration,
+                )
                 contradictions = await self._evaluator.evaluate_contradictions(board)
                 # Persist phase boundary evaluation to DB
                 await self._evaluator.save_to_db(evaluation, self._iteration)
@@ -909,7 +975,9 @@ class OrchestrationEngine:
             return
 
         try:
-            evaluation = await self._evaluator.evaluate_phase(self._board, self._phase)
+            evaluation = await self._evaluator.evaluate_phase(
+                self._board, self._phase, iteration=self._iteration,
+            )
             # Compute information gain
             summary = await self._build_state_summary(self._board, role=None)
             ig_metric = self._evaluator.check_information_gain(summary)

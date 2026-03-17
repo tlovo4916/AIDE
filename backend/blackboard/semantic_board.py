@@ -24,10 +24,10 @@ from backend.utils.json_utils import safe_json_loads
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from backend.agents.base import LLMRouter
     from backend.blackboard.actions import ActionExecutor
     from backend.blackboard.levels import LevelGenerator
     from backend.knowledge.embeddings import EmbeddingService
+    from backend.protocols import LLMRouter
 
 logger = logging.getLogger(__name__)
 

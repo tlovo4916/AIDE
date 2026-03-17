@@ -7,16 +7,12 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from backend.config import settings
+from backend.protocols import Board
 
 logger = logging.getLogger(__name__)
-
-
-class Board(Protocol):
-    async def serialize(self) -> dict[str, Any]: ...
-    def get_project_path(self) -> Path: ...
 
 
 class HeartbeatMonitor:

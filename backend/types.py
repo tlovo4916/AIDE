@@ -163,6 +163,7 @@ class OrchestratorDecision(BaseModel):
     checkpoint_reason: str | None = None
     backtrack_to: ResearchPhase | None = None
     rationale: str = ""
+    candidate_scores: list[dict] | None = None
 
 
 class ConvergenceSignals(BaseModel):

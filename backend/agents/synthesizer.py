@@ -32,41 +32,38 @@ class SynthesizerAgent(BaseAgent):
         lines: list[str] = []
 
         # Query board for artifact counts to build comparison
-        if self._board:
-            try:
-                hypotheses = await self._board.list_artifacts(ArtifactType.HYPOTHESES)
-                evidence = await self._board.list_artifacts(ArtifactType.EVIDENCE_FINDINGS)
-                reviews = await self._board.list_artifacts(ArtifactType.REVIEW)
-                drafts = await self._board.list_artifacts(ArtifactType.DRAFT)
+        hypotheses = await self._query_board(ArtifactType.HYPOTHESES)
+        evidence = await self._query_board(ArtifactType.EVIDENCE_FINDINGS)
+        reviews = await self._query_board(ArtifactType.REVIEW)
+        drafts = await self._query_board(ArtifactType.DRAFT)
 
-                # Detect lane sections in context
-                lane_pattern = re.compile(r"##\s*Lane\s*(\d+)", re.I)
-                lane_ids = lane_pattern.findall(context)
+        if hypotheses or evidence or reviews or drafts:
+            # Detect lane sections in context
+            lane_pattern = re.compile(r"##\s*Lane\s*(\d+)", re.I)
+            lane_ids = lane_pattern.findall(context)
 
-                if len(lane_ids) >= 2:
-                    lines.append("\n## Cross-Lane Comparison Matrix (from board)")
-                    lines.append(f"  Lanes: {', '.join(lane_ids)}")
-                    lines.append(
-                        f"  Total artifacts: {len(hypotheses)} hypotheses, "
-                        f"{len(evidence)} evidence, {len(reviews)} reviews, "
-                        f"{len(drafts)} drafts"
+            if len(lane_ids) >= 2:
+                lines.append("\n## Cross-Lane Comparison Matrix (from board)")
+                lines.append(f"  Lanes: {', '.join(lane_ids)}")
+                lines.append(
+                    f"  Total artifacts: {len(hypotheses)} hypotheses, "
+                    f"{len(evidence)} evidence, {len(reviews)} reviews, "
+                    f"{len(drafts)} drafts"
+                )
+
+                # Per-lane breakdown from context sections
+                for lane_id in lane_ids[:5]:
+                    lane_start = context.find(f"## Lane {lane_id}")
+                    if lane_start < 0:
+                        continue
+                    next_lane = context.find("## Lane ", lane_start + 10)
+                    lane_text = (
+                        context[lane_start:next_lane]
+                        if next_lane > 0
+                        else context[lane_start:]
                     )
-
-                    # Per-lane breakdown from context sections
-                    for lane_id in lane_ids[:5]:
-                        lane_start = context.find(f"## Lane {lane_id}")
-                        if lane_start < 0:
-                            continue
-                        next_lane = context.find("## Lane ", lane_start + 10)
-                        lane_text = (
-                            context[lane_start:next_lane]
-                            if next_lane > 0
-                            else context[lane_start:]
-                        )
-                        art_types = re.findall(r"###\s*(\w+)", lane_text)
-                        lines.append(f"  Lane {lane_id}: {', '.join(art_types[:8])}")
-            except Exception as exc:
-                logger.debug("[Synthesizer] Board query failed: %s", exc)
+                    art_types = re.findall(r"###\s*(\w+)", lane_text)
+                    lines.append(f"  Lane {lane_id}: {', '.join(art_types[:8])}")
 
         # Fallback: pure context-based lane detection
         if not lines:

@@ -169,6 +169,7 @@ class EvaluatorService:
         generator_model: str = "",
         evaluator_model: str | None = None,
         *,
+        iteration: int = 0,
         use_cross_model: bool = True,
         use_multi_dim: bool = True,
         use_computable: bool = True,
@@ -259,7 +260,7 @@ class EvaluatorService:
 
         # Persist to DB if project_id is set
         if self._project_id:
-            await self._save_evaluation_to_db(eval_result, iteration=0)
+            await self._save_evaluation_to_db(eval_result, iteration=iteration)
 
         return eval_result
 

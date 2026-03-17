@@ -1,3 +1,23 @@
+/**
+ * AIDE API Client
+ *
+ * Sections:
+ *   1. Core (request helper)
+ *   2. Projects (CRUD + lifecycle)
+ *   3. Papers (upload, search, export)
+ *   4. Checkpoints (list, respond)
+ *   5. Settings (read, update)
+ *   6. Blackboard (artifacts, challenges, messages)
+ *   7. Lanes (multi-lane statuses)
+ *   8. Citation Graph
+ *   9. Token Usage
+ *  10. Evaluations (scores, metrics, claims, contradictions)
+ */
+
+// =====================================================================
+// 1. Core
+// =====================================================================
+
 function getApiBase(): string {
   if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
   if (typeof window !== "undefined") {
@@ -27,7 +47,9 @@ async function request<T>(
   return res.json();
 }
 
-// --- Projects ---
+// =====================================================================
+// 2. Projects
+// =====================================================================
 
 export interface CreateProjectPayload {
   name: string;
@@ -97,7 +119,9 @@ export function resumeProject(id: string) {
   );
 }
 
-// --- Papers ---
+// =====================================================================
+// 3. Papers
+// =====================================================================
 
 export function uploadPaper(projectId: string, file: File) {
   const form = new FormData();
@@ -157,7 +181,9 @@ export function savePaperContent(projectId: string, content: string) {
   });
 }
 
-// --- Checkpoints ---
+// =====================================================================
+// 4. Checkpoints
+// =====================================================================
 
 export function listCheckpoints(projectId: string) {
   return request<
@@ -185,7 +211,9 @@ export function respondToCheckpoint(
   );
 }
 
-// --- Settings ---
+// =====================================================================
+// 5. Settings
+// =====================================================================
 
 export function getSettings() {
   return request<Record<string, unknown>>("/api/settings");
@@ -198,7 +226,9 @@ export function updateSettings(settings: Record<string, unknown>) {
   });
 }
 
-// --- Blackboard ---
+// =====================================================================
+// 6. Blackboard
+// =====================================================================
 
 export function getBlackboard(projectId: string, lane?: number) {
   const params = lane !== undefined ? `?lane=${lane}` : "";
@@ -209,7 +239,9 @@ export function getBlackboard(projectId: string, lane?: number) {
   }>(`/api/projects/${projectId}/blackboard${params}`);
 }
 
-// --- Lane Statuses ---
+// =====================================================================
+// 7. Lanes
+// =====================================================================
 
 export interface LaneStatus {
   lane: number;
@@ -221,7 +253,9 @@ export function getLaneStatuses(projectId: string) {
   return request<LaneStatus[]>(`/api/projects/${projectId}/lanes`);
 }
 
-// --- Citation Graph ---
+// =====================================================================
+// 8. Citation Graph
+// =====================================================================
 
 export interface CitationGraphData {
   nodes: {
@@ -242,7 +276,9 @@ export function getCitationGraph(projectId: string) {
   return request<CitationGraphData>(`/api/projects/${projectId}/citation-graph`);
 }
 
-// --- Token Usage ---
+// =====================================================================
+// 9. Token Usage
+// =====================================================================
 
 export interface ProjectTokenUsage {
   project_id: string;
@@ -263,4 +299,76 @@ export interface ProjectTokenUsage {
 
 export function getProjectUsage(projectId: string) {
   return request<ProjectTokenUsage>(`/api/projects/${projectId}/usage`);
+}
+
+// =====================================================================
+// 10. Evaluations
+// =====================================================================
+
+export interface EvaluationResult {
+  id: string;
+  phase: string;
+  iteration: number;
+  composite_score: number;
+  evaluator_model: string;
+  dimensions: Record<string, {
+    computable_value?: number;
+    llm_value?: number;
+    combined: number;
+    weight: number;
+    evidence?: string;
+  }>;
+  created_at: string;
+}
+
+export interface IterationMetric {
+  id: string;
+  phase: string;
+  iteration: number;
+  information_gain: number | null;
+  eval_composite: number | null;
+  artifact_count_delta: number | null;
+  unique_claim_delta: number | null;
+  metrics: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface ClaimData {
+  claim_id: string;
+  text: string;
+  source_artifact: string;
+  confidence: "strong" | "moderate" | "tentative";
+}
+
+export interface ContradictionData {
+  id: string;
+  claim_a_id: string;
+  claim_b_id: string;
+  confidence: number;
+  evidence: Record<string, unknown>;
+  status: string;
+}
+
+export function getEvaluations(projectId: string, limit = 100) {
+  return request<EvaluationResult[]>(
+    `/api/projects/${projectId}/evaluations?limit=${limit}`
+  );
+}
+
+export function getIterationMetrics(projectId: string, limit = 100) {
+  return request<IterationMetric[]>(
+    `/api/projects/${projectId}/iteration-metrics?limit=${limit}`
+  );
+}
+
+export function getClaims(projectId: string, limit = 100) {
+  return request<ClaimData[]>(
+    `/api/projects/${projectId}/claims?limit=${limit}`
+  );
+}
+
+export function getContradictions(projectId: string, limit = 100) {
+  return request<ContradictionData[]>(
+    `/api/projects/${projectId}/contradictions?limit=${limit}`
+  );
 }

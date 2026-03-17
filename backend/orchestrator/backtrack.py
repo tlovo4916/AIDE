@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Protocol
 
+from backend.protocols import Board
 from backend.types import ConvergenceSignals, ResearchPhase
 
 logger = logging.getLogger(__name__)
@@ -17,15 +17,6 @@ _PHASE_ORDER = [
     ResearchPhase.COMPOSE,
     ResearchPhase.COMPLETE,
 ]
-
-
-class Board(Protocol):
-    async def get_artifacts_since_phase(self, phase: ResearchPhase) -> list[str]: ...
-    async def mark_superseded(self, artifact_id: str) -> None: ...
-    async def update_meta(self, key: str, value: object) -> None: ...
-    async def has_contradictory_evidence(self) -> bool: ...
-    async def has_logic_gaps(self) -> bool: ...
-    async def has_direction_issues(self) -> bool: ...
 
 
 class BacktrackController:

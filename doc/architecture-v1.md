@@ -1,10 +1,8 @@
-# AIDE 架构重建方案
+# AIDE v1系统架构
 
-> **目标**：将 AIDE 从"带精致 UI 的 LLM prompt 轮转调用器"改造为真正的自动科研系统。
+> **定位**：系统设计文档 — 记录架构决策、模块职责与设计理由。
 >
-> **核心哲学**：不是让系统"看起来"在做研究，而是让系统"知道"自己在做什么、做得好不好、下一步该做什么。
->
-> **状态**：设计阶段 | 最后更新：2026-03-17
+> **最后更新**：2026-03-18 | 遗留问题见 [q.md](./q.md)
 
 ---
 
@@ -1212,15 +1210,117 @@ interface ArtifactUpdatedPayload {
 
 **不删除任何现有事件**，全部向后兼容。
 
-### 7.2 新增 UI 组件
+### 7.2 Phase 5: 前端升级方案
 
-| 组件 | 位置 | 功能 |
-|------|------|------|
-| 质量雷达图 | Overview | 多维评分可视化，替代单一 critic 分数 |
-| 语义关系图 | Blackboard | artifact 间关系网络（supports/contradicts），点击展开 |
-| Planner 透明面板 | Overview | 展示每次调度决策原因和候选 Agent 分数 |
-| 矛盾追踪面板 | 新区域 | 已发现矛盾、解决状态、证据链 |
-| 信息增益趋势图 | Overview | 每轮信息增益折线图，显示收敛趋势 |
+#### 设计原则
+
+后端从 Phase 1-4 已经具备了认知、评判、决策三大能力，但前端仍然是 v1 的"消息流 + artifact 卡片"展示。前端升级的核心目标：**让用户看到系统在"思考"什么，而不仅仅是"产出"了什么。**
+
+#### 新增 Sidebar Section：Evaluation
+
+在现有 5 个 section（Overview / Blackboard / Messages / Knowledge / Paper）基础上新增第 6 个：**Evaluation**。
+
+修改文件：
+- `frontend/src/app/projects/[id]/_components/sidebar.tsx` — `PROJECT_SECTIONS` 数组添加 `{ key: "evaluation", icon: Activity }`
+- `frontend/src/contexts/ProjectSidebarContext.tsx` — `ProjectSection` 类型添加 `"evaluation"`
+- `frontend/src/app/projects/[id]/page.tsx` — 添加 `activeSection === "evaluation"` 渲染条件
+
+#### 新增 API Client 函数
+
+在 `frontend/src/lib/api.ts` 中添加：
+
+```typescript
+export function getEvaluations(projectId: string, limit = 100) {
+  return request(`/api/projects/${projectId}/evaluations?limit=${limit}`);
+}
+export function getIterationMetrics(projectId: string, limit = 100) {
+  return request(`/api/projects/${projectId}/iteration-metrics?limit=${limit}`);
+}
+export function getClaims(projectId: string, limit = 100) {
+  return request(`/api/projects/${projectId}/claims?limit=${limit}`);
+}
+export function getContradictions(projectId: string, limit = 100) {
+  return request(`/api/projects/${projectId}/contradictions?limit=${limit}`);
+}
+```
+
+#### 新增 WS 事件处理
+
+在 `_hooks/useProjectState.ts` 中添加 `EvaluationCompleted` 和 `PhaseEvaluationCompleted` 事件处理，实时更新评估数据。
+
+#### EvaluationSection 组件设计
+
+新文件：`frontend/src/app/projects/[id]/_components/EvaluationSection.tsx`
+
+包含 4 个子面板，按优先级排序：
+
+##### P0: 研究质量仪表盘（Composite Score + 维度雷达图）
+
+用 Recharts（已安装 v2.15.0）实现：
+
+- **折线图**：每轮迭代的 `composite_score` 趋势，按 phase 分色
+- **雷达图**：当前 phase 的 4-5 个维度评分（coverage_breadth, source_diversity, terminology_coverage, gap_identification 等）
+- **信息增益面积图**：`information_gain` 随迭代递减的趋势，直观展示"信息枯竭→收敛"
+
+数据源：`GET /api/projects/{id}/evaluations` + `GET /api/projects/{id}/iteration-metrics`
+
+##### P1: Planner 决策日志（为什么选这个 Agent）
+
+- **时间线列表**：每次迭代显示：选了哪个 Agent、评分多少、为什么（rationale）、其他候选的分数
+- 让用户看到系统在"思考"而非"轮转"
+
+数据源：WS 事件 `PlannerDecision`（或从 `iteration_metrics.metrics` JSON 字段读取）
+
+##### P2: 矛盾追踪面板
+
+- **矛盾卡片列表**：每个矛盾显示 Claim A vs Claim B、置信度、状态（unresolved / resolved / accepted_as_limitation）
+- 状态用颜色区分：红色=未解决，绿色=已解决，灰色=接受为局限
+
+数据源：`GET /api/projects/{id}/contradictions` + `GET /api/projects/{id}/claims`
+
+##### P3: Claims 知识图谱（可选，复杂度最高）
+
+- 展示提取的 claims 及其来源 artifact、置信度
+- 可筛选：按 agent / 按置信度 / 按类型（factual/causal/comparative）
+
+数据源：`GET /api/projects/{id}/claims`
+
+#### OverviewSection 增强
+
+在现有 OverviewSection 中嵌入轻量级评估摘要（不需要切到 Evaluation tab 就能看到核心指标）：
+
+- **Mini 评分卡**：当前 phase 的 composite_score（大字号）+ 相比上次迭代的变化（↑↓）
+- **收敛进度条**：质量达标（✓/✗）+ 信息枯竭（✓/✗）+ 无矛盾（✓/✗）→ 三条件可视化
+
+#### 工作量估算
+
+| 工作项 | Sessions | 优先级 |
+|--------|----------|--------|
+| Sidebar + 路由 + API client + 类型定义 | 1 | P0 |
+| 质量仪表盘（折线图 + 雷达图 + 信息增益图） | 2-3 | P0 |
+| OverviewSection mini 评分卡 + 收敛进度条 | 1 | P0 |
+| Planner 决策日志时间线 | 1-2 | P1 |
+| 矛盾追踪面板 | 1-2 | P2 |
+| Claims 知识图谱 | 2-3 | P3 |
+| WS 实时更新集成 | 1 | P1 |
+| **合计** | **9-13 sessions** | |
+
+#### 里程碑
+
+**M5a（P0 完成）**：Evaluation tab 可用，折线图+雷达图+信息增益图渲染正常，OverviewSection 显示 mini 评分卡。约 4 sessions。
+
+**M5b（P1 完成）**：Planner 决策日志可见，用户能看到"为什么选这个 Agent"。约 6 sessions 累计。
+
+**M5c（全部完成）**：矛盾面板 + Claims 图谱上线。约 10-13 sessions 累计。
+
+#### 设计规范
+
+遵循现有 Indigo 设计系统：
+- 颜色：`#818cf8`（dark）/ `#4f46e5`（light）
+- 卡片：`rounded-xl border border-aide-border bg-aide-bg-tertiary`
+- 图表主色：Indigo 渐变（`#818cf8` → `#6366f1` → `#4f46e5`）
+- 深色/浅色模式：通过 CSS 变量自动适配
+- 响应式：grid/flex + Tailwind，无固定宽度
 
 ### 7.3 可简化的前端
 

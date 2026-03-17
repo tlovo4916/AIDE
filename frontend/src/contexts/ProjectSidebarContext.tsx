@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, type ReactNode } from "react";
 
-export type ProjectSection = "overview" | "blackboard" | "messages" | "knowledge" | "paper";
+export type ProjectSection = "overview" | "blackboard" | "messages" | "knowledge" | "paper" | "evaluation";
 
 interface ProjectSidebarContextValue {
   projectName: string;

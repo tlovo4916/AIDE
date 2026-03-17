@@ -98,8 +98,8 @@ export function useBlackboard(ws: WsHook, projectId: string, lane?: number | "sy
   // events from that lane; when viewing synthesis/main, only accept events
   // without lane_index.
   const shouldAcceptEvent = useCallback(
-    (payload: Record<string, unknown>): boolean => {
-      const eventLane = payload.lane_index as number | undefined;
+    (payload: { lane_index?: number }): boolean => {
+      const eventLane = payload.lane_index;
       if (typeof lane === "number") return eventLane === lane;
       // synthesis or no lane selected → accept events without lane_index
       return eventLane === undefined || eventLane === null;
@@ -109,7 +109,7 @@ export function useBlackboard(ws: WsHook, projectId: string, lane?: number | "sy
 
   const handleArtifactUpdated = useCallback(
     (payload: ArtifactUpdatedPayload) => {
-      if (!shouldAcceptEvent(payload as unknown as Record<string, unknown>)) return;
+      if (!shouldAcceptEvent(payload)) return;
       setState((prev) => {
         const type = payload.artifact_type;
         const existing = prev.artifacts[type] ?? [];
@@ -145,7 +145,7 @@ export function useBlackboard(ws: WsHook, projectId: string, lane?: number | "sy
 
   const handleChallengeRaised = useCallback(
     (payload: ChallengeRaisedPayload) => {
-      if (!shouldAcceptEvent(payload as unknown as Record<string, unknown>)) return;
+      if (!shouldAcceptEvent(payload)) return;
       setState((prev) => ({
         ...prev,
         challenges: [
@@ -164,7 +164,7 @@ export function useBlackboard(ws: WsHook, projectId: string, lane?: number | "sy
 
   const handleChallengeResolved = useCallback(
     (payload: ChallengeResolvedPayload) => {
-      if (!shouldAcceptEvent(payload as unknown as Record<string, unknown>)) return;
+      if (!shouldAcceptEvent(payload)) return;
       setState((prev) => ({
         ...prev,
         challenges: prev.challenges.map((c) =>
@@ -177,15 +177,15 @@ export function useBlackboard(ws: WsHook, projectId: string, lane?: number | "sy
 
   const handlePhaseAdvanced = useCallback(
     (payload: PhaseAdvancedPayload) => {
-      if (!shouldAcceptEvent(payload as unknown as Record<string, unknown>)) return;
+      if (!shouldAcceptEvent(payload)) return;
       setState((prev) => ({ ...prev, currentPhase: payload.phase }));
     },
     [shouldAcceptEvent]
   );
 
   const handleAgentActivity = useCallback(
-    (payload: { agent?: string; action?: string; timestamp?: string }) => {
-      if (!shouldAcceptEvent(payload as unknown as Record<string, unknown>)) return;
+    (payload: { agent?: string; action?: string; timestamp?: string; lane_index?: number }) => {
+      if (!shouldAcceptEvent(payload)) return;
       if (!payload.agent || !payload.action) return;
       setState((prev) => ({
         ...prev,

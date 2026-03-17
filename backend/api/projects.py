@@ -71,9 +71,13 @@ async def create_project(
 
 @router.get("", response_model=list[ProjectOut])
 async def list_projects(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
 ) -> list[Project]:
-    result = await session.execute(select(Project).order_by(Project.created_at.desc()))
+    result = await session.execute(
+        select(Project).order_by(Project.created_at.desc()).offset(skip).limit(limit)
+    )
     return list(result.scalars().all())
 
 

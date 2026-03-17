@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from backend.agents.base import LLMRouter
 from backend.config import settings
+from backend.protocols import LLMRouter
 from backend.types import (
     AgentRole,
     ArtifactType,
@@ -239,6 +239,7 @@ class OrchestratorPlanner:
         self._critic_last_iter: dict[str, int] = {}  # phase.value -> last iter critic was called
         # History buffer: phase.value -> list of (iteration, agent.value) tuples (last 5)
         self._selection_history: dict[str, list[tuple[int, str]]] = {}
+        self._last_candidate_scores: list[dict] | None = None
 
     async def plan_next_action(
         self,
@@ -401,6 +402,10 @@ class OrchestratorPlanner:
             rationale[:80],
         )
 
+        # Collect candidate scores if available from adaptive path
+        candidates = self._last_candidate_scores
+        self._last_candidate_scores = None
+
         return OrchestratorDecision(
             agent_to_invoke=agent,
             task_description=task_desc,
@@ -408,6 +413,7 @@ class OrchestratorPlanner:
             allow_subagents=allow_sub,
             trigger_checkpoint=False,
             rationale=rationale,
+            candidate_scores=candidates,
         )
 
     async def _adaptive_select(
@@ -434,6 +440,11 @@ class OrchestratorPlanner:
         )
         if not scores:
             return self._rule_select(phase, iteration, None)
+
+        # Store candidate scores for the engine to broadcast
+        self._last_candidate_scores = [
+            {"agent": s.role.value, "score": round(s.total, 3)} for s in scores
+        ]
 
         top = scores[0]
 

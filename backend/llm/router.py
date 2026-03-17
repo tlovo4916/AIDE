@@ -73,12 +73,14 @@ class LLMRouter:
     def resolve_model(self, role: AgentRole | str | None = None) -> str:
         """Return the model string for a given agent role.
 
-        Priority: local (per-project) overrides -> global user overrides -> role defaults -> global default.
+        Priority: local (per-project) overrides -> global user
+        overrides -> role defaults -> global default.
         """
         if role is not None:
             key = role.value if isinstance(role, AgentRole) else role
             # 1. Per-project / per-lane local overrides (set via config_json)
-            if self._local_overrides and key in self._local_overrides and self._local_overrides[key]:
+            if (self._local_overrides and key in self._local_overrides
+                    and self._local_overrides[key]):
                 return self._local_overrides[key]
             # 2. Global user overrides (from settings page)
             overrides = settings.agent_model_overrides

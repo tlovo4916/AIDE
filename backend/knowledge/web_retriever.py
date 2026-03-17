@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import re
 from typing import Any
@@ -19,6 +20,8 @@ HUGGINGFACE_PAPERS_API = "https://huggingface.co/api/papers"
 REQUEST_DELAY = 1.5
 _MAX_RETRIES = 3
 _RATE_LIMIT_BACKOFF = 15.0
+# Default: only retrieve papers from the last N years
+_DEFAULT_YEAR_LOOKBACK = 3
 
 
 def _extract_english_keywords(text: str) -> str:
@@ -78,8 +81,15 @@ class WebRetriever:
         await self._arxiv_client.aclose()
         await self._hf_client.aclose()
 
-    async def search_semantic_scholar(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        logger.info("[WebRetriever] S2 query: %r", query[:80])
+    async def search_semantic_scholar(
+        self,
+        query: str,
+        limit: int = 10,
+        year_min: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if year_min is None:
+            year_min = datetime.datetime.now(datetime.UTC).year - _DEFAULT_YEAR_LOOKBACK
+        logger.info("[WebRetriever] S2 query: %r (year>=%d)", query[:80], year_min)
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 resp = await self._s2_client.get(
@@ -87,13 +97,15 @@ class WebRetriever:
                     params={
                         "query": query,
                         "limit": limit,
-                        "fields": "paperId,title,abstract,authors,year,citationCount,externalIds",
+                        "year": f"{year_min}-",
+                        "fields": "paperId,title,abstract,authors,year,citationCount,externalIds,venue",
                     },
                 )
                 resp.raise_for_status()
                 data = resp.json()
                 await asyncio.sleep(REQUEST_DELAY)
                 results = [_normalize_s2(p) for p in data.get("data", [])]
+                results.sort(key=lambda p: p.get("citation_count", 0), reverse=True)
                 logger.info("[WebRetriever] S2 returned %d papers", len(results))
                 return results
             except httpx.HTTPStatusError as exc:
@@ -130,17 +142,32 @@ class WebRetriever:
                     await asyncio.sleep(REQUEST_DELAY * (attempt + 1))
         return []
 
-    async def search_arxiv(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+    async def search_arxiv(
+        self,
+        query: str,
+        limit: int = 10,
+        year_min: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if year_min is None:
+            year_min = datetime.datetime.now(datetime.UTC).year - _DEFAULT_YEAR_LOOKBACK
         en_query = _extract_english_keywords(query)
-        logger.info("[WebRetriever] arXiv query: %r (original: %r)", en_query, query[:60])
+        # arXiv date filter: submittedDate:[YYYYMMDD0000 TO *]
+        date_filter = f" AND submittedDate:[{year_min}01010000 TO 99991231235959]"
+        search_query = f"all:{en_query}{date_filter}"
+        logger.info(
+            "[WebRetriever] arXiv query: %r (year>=%d, original: %r)",
+            en_query, year_min, query[:60],
+        )
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 resp = await self._arxiv_client.get(
                     ARXIV_API_BASE,
                     params={
-                        "search_query": f"all:{en_query}",
+                        "search_query": search_query,
                         "start": 0,
                         "max_results": limit,
+                        "sortBy": "submittedDate",
+                        "sortOrder": "descending",
                     },
                 )
                 resp.raise_for_status()
@@ -159,6 +186,37 @@ class WebRetriever:
                     await asyncio.sleep(REQUEST_DELAY * (attempt + 1))
         return []
 
+
+    async def fetch_references(
+        self,
+        paper_id: str,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Fetch references of a paper from Semantic Scholar (1-hop)."""
+        logger.info("[WebRetriever] Fetching references for paper %s", paper_id)
+        try:
+            resp = await self._s2_client.get(
+                f"/paper/{paper_id}/references",
+                params={
+                    "limit": limit,
+                    "fields": "paperId,title,abstract,authors,year,citationCount,externalIds",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            await asyncio.sleep(REQUEST_DELAY)
+            results = []
+            for ref_entry in data.get("data", []):
+                cited = ref_entry.get("citedPaper")
+                if cited and cited.get("paperId") and cited.get("title"):
+                    results.append(_normalize_s2(cited))
+            logger.info(
+                "[WebRetriever] References for %s: %d papers", paper_id, len(results),
+            )
+            return results
+        except Exception as exc:
+            logger.warning("[WebRetriever] Reference fetch failed for %s: %s", paper_id, exc)
+            return []
 
     async def search_huggingface(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         """Search HuggingFace Papers API for trending/relevant papers."""
@@ -217,6 +275,7 @@ def _normalize_hf(paper: dict[str, Any]) -> dict[str, Any]:
 def _normalize_s2(paper: dict[str, Any]) -> dict[str, Any]:
     authors = [a.get("name", "") for a in paper.get("authors", [])]
     ext = paper.get("externalIds", {}) or {}
+    venue = paper.get("venue", "") or ""
     return {
         "paper_id": paper.get("paperId", ""),
         "title": paper.get("title", ""),
@@ -226,6 +285,8 @@ def _normalize_s2(paper: dict[str, Any]) -> dict[str, Any]:
         "citation_count": paper.get("citationCount", 0),
         "doi": ext.get("DOI", ""),
         "arxiv_id": ext.get("ArXiv", ""),
+        "venue": venue,
+        "is_peer_reviewed": bool(venue and venue.lower() not in ("", "arxiv")),
         "source": "semantic_scholar",
     }
 

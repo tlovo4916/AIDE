@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 import time
 from typing import TYPE_CHECKING
@@ -17,6 +18,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
+
+# Weights for combined relevance + citation scoring
+_RELEVANCE_WEIGHT = 0.7
+_CITATION_WEIGHT = 0.3
+_SNOWBALL_MAX_NEW_PAPERS = 10
 
 # S2 cooldown: after 429, skip S2 for this many seconds
 _S2_COOLDOWN_SECONDS = 300  # 5 minutes
@@ -68,31 +74,27 @@ class LibrarianAgent(BaseAgent):
         lines: list[str] = []
 
         # Query board for evidence gaps and unsupported hypotheses
-        if self._board:
-            try:
-                gaps_artifacts = await self._board.list_artifacts(ArtifactType.EVIDENCE_GAPS)
-                hypotheses = await self._board.list_artifacts(ArtifactType.HYPOTHESES)
-                evidence = await self._board.list_artifacts(ArtifactType.EVIDENCE_FINDINGS)
+        gaps_artifacts = await self._query_board(ArtifactType.EVIDENCE_GAPS)
+        hypotheses = await self._query_board(ArtifactType.HYPOTHESES)
+        evidence = await self._query_board(ArtifactType.EVIDENCE_FINDINGS)
 
-                if gaps_artifacts or (hypotheses and not evidence):
-                    lines.append("\n## Evidence Gaps (from board)")
-                    if gaps_artifacts:
-                        lines.append(f"  Explicit gap artifacts: {len(gaps_artifacts)}")
-                        for g in gaps_artifacts[-3:]:
-                            text = g if isinstance(g, str) else str(g)
-                            lines.append(f"  - {text[:200]}")
-                    if hypotheses and not evidence:
-                        lines.append(
-                            f"  ⚠️ {len(hypotheses)} hypotheses exist with "
-                            f"NO supporting evidence — prioritize evidence search"
-                        )
-                    elif hypotheses and evidence:
-                        lines.append(
-                            f"  Hypotheses: {len(hypotheses)}, "
-                            f"Evidence: {len(evidence)}"
-                        )
-            except Exception as exc:
-                logger.debug("[Librarian] Board query failed: %s", exc)
+        if gaps_artifacts or (hypotheses and not evidence):
+            lines.append("\n## Evidence Gaps (from board)")
+            if gaps_artifacts:
+                lines.append(f"  Explicit gap artifacts: {len(gaps_artifacts)}")
+                for g in gaps_artifacts[-3:]:
+                    text = g if isinstance(g, str) else str(g)
+                    lines.append(f"  - {text[:200]}")
+            if hypotheses and not evidence:
+                lines.append(
+                    f"  ⚠️ {len(hypotheses)} hypotheses exist with "
+                    f"NO supporting evidence — prioritize evidence search"
+                )
+            elif hypotheses and evidence:
+                lines.append(
+                    f"  Hypotheses: {len(hypotheses)}, "
+                    f"Evidence: {len(evidence)}"
+                )
 
         # Fallback: regex scan context for gap mentions
         if not lines:
@@ -137,6 +139,17 @@ class LibrarianAgent(BaseAgent):
         papers: list[dict] = []
         try:
             papers = await self._search_with_fallback(retriever, query, en_query)
+            # Re-rank by combined relevance + citation score
+            if papers:
+                papers = self._rank_by_citations(papers)
+
+            # Snowball: expand via references of top seed papers
+            if papers:
+                topic = en_query or query
+                snowball_papers = await self._snowball_search(retriever, papers, topic)
+                if snowball_papers:
+                    snowball_papers = self._rank_by_citations(snowball_papers)
+                    papers.extend(snowball_papers)
         except Exception as exc:
             logger.error("[Librarian] All retrieval attempts failed: %s", exc)
         finally:
@@ -354,6 +367,100 @@ class LibrarianAgent(BaseAgent):
                 )
 
         return []
+
+    @staticmethod
+    def _rank_by_citations(papers: list[dict]) -> list[dict]:
+        """Re-rank papers using a weighted combination of position relevance and citations.
+
+        Position in the original list serves as a proxy for API relevance score
+        (position 0 = most relevant = score 1.0, last = least relevant).
+        Citation counts are log-normalized to avoid mega-cited survey papers
+        dominating results.
+        """
+        if not papers:
+            return papers
+
+        n = len(papers)
+        # Log-normalize citation counts: log(1 + count) / max_log
+        log_cites = [math.log1p(p.get("citation_count", 0) or 0) for p in papers]
+        max_log = max(log_cites) if log_cites else 1.0
+        if max_log == 0:
+            max_log = 1.0
+
+        scored: list[tuple[float, int, dict]] = []
+        for i, paper in enumerate(papers):
+            relevance = 1.0 - (i / max(n - 1, 1))  # 1.0 for first, 0.0 for last
+            norm_cite = log_cites[i] / max_log
+            final_score = _RELEVANCE_WEIGHT * relevance + _CITATION_WEIGHT * norm_cite
+            scored.append((final_score, i, paper))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [paper for _, _, paper in scored]
+
+    async def _snowball_search(
+        self,
+        retriever: WebRetriever,
+        seed_papers: list[dict],
+        research_topic: str,
+    ) -> list[dict]:
+        """1-hop snowball: fetch references of seed papers, filter by topic relevance.
+
+        Returns up to _SNOWBALL_MAX_NEW_PAPERS new papers not already in seeds.
+        """
+        if not seed_papers:
+            return []
+
+        existing_ids: set[str] = set()
+        for p in seed_papers:
+            pid = p.get("paper_id") or p.get("arxiv_id", "")
+            if pid:
+                existing_ids.add(pid)
+
+        # Extract topic keywords for relevance filtering
+        topic_words = set(re.findall(r"[a-zA-Z]{3,}", research_topic.lower()))
+
+        new_papers: list[dict] = []
+        # Only snowball from top 3 seed papers to limit API calls
+        for seed in seed_papers[:3]:
+            s2_id = seed.get("paper_id", "")
+            if not s2_id or seed.get("source") not in ("semantic_scholar", None, ""):
+                continue
+
+            try:
+                refs = await retriever.fetch_references(s2_id, limit=20)
+            except Exception as exc:
+                logger.warning("[Librarian] Snowball ref fetch failed for %s: %s", s2_id, exc)
+                continue
+
+            for ref in refs:
+                ref_id = ref.get("paper_id") or ref.get("arxiv_id", "")
+                if not ref_id or ref_id in existing_ids:
+                    continue
+
+                # Relevance filter: title/abstract must share keywords with topic
+                title = (ref.get("title") or "").lower()
+                abstract = (ref.get("abstract") or "").lower()
+                ref_text = title + " " + abstract
+                ref_words = set(re.findall(r"[a-zA-Z]{3,}", ref_text))
+                overlap = topic_words & ref_words
+                if len(overlap) < 2:
+                    continue
+
+                existing_ids.add(ref_id)
+                new_papers.append(ref)
+                if len(new_papers) >= _SNOWBALL_MAX_NEW_PAPERS:
+                    break
+
+            if len(new_papers) >= _SNOWBALL_MAX_NEW_PAPERS:
+                break
+
+        if new_papers:
+            logger.info(
+                "[Librarian] Snowball search found %d new papers from %d seeds",
+                len(new_papers),
+                min(len(seed_papers), 3),
+            )
+        return new_papers
 
     def _update_citation_graph(self, papers: list[dict]) -> None:
         """Add retrieved papers to the project's citation graph."""

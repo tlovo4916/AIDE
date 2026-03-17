@@ -28,50 +28,52 @@ class WriterAgent(BaseAgent):
     can_spawn_subagents = True
 
     async def pre_execute(self, context: str, task: AgentTask) -> str:
-        """Build claim-evidence map from board artifacts."""
-        lines: list[str] = []
+        """Build claim-evidence map from board artifacts with evidence counts."""
+        lines = await self._build_artifact_summary(
+            [
+                (ArtifactType.EVIDENCE_FINDINGS, "Evidence artifacts"),
+                (ArtifactType.HYPOTHESES, "Hypotheses"),
+                (ArtifactType.DRAFT, "Drafts"),
+                (ArtifactType.OUTLINE, "Outlines"),
+            ],
+            "Claim-Evidence Map",
+        )
 
-        # Query board for evidence and draft artifacts
-        if self._board:
-            try:
-                evidence = await self._board.list_artifacts(ArtifactType.EVIDENCE_FINDINGS)
-                hypotheses = await self._board.list_artifacts(ArtifactType.HYPOTHESES)
-                drafts = await self._board.list_artifacts(ArtifactType.DRAFT)
-                outlines = await self._board.list_artifacts(ArtifactType.OUTLINE)
+        # Query board for artifacts needed by downstream analysis
+        evidence = await self._query_board(ArtifactType.EVIDENCE_FINDINGS)
+        hypotheses = await self._query_board(ArtifactType.HYPOTHESES)
+        drafts = await self._query_board(ArtifactType.DRAFT)
 
-                lines.append("\n## Claim-Evidence Map (from board)")
-                lines.append(f"  Evidence artifacts: {len(evidence)}")
-                lines.append(f"  Hypotheses: {len(hypotheses)}")
-                lines.append(f"  Drafts: {len(drafts)}, Outlines: {len(outlines)}")
+        if lines:
+            evidence_count = len(evidence) + len(hypotheses)
+            lines.append(f"  evidence_count: {evidence_count} distinct source artifacts")
 
-                # Count citations in existing drafts
-                citation_pattern = re.compile(
-                    r"\[(?:\d+|[A-Z][a-z]+(?:\s+et\s+al\.?)?,?\s*\d{4})\]"
+            # Count citations in existing drafts
+            citation_pattern = re.compile(
+                r"\[(?:\d+|[A-Z][a-z]+(?:\s+et\s+al\.?)?,?\s*\d{4})\]"
+            )
+            total_citations = 0
+            total_claims = 0
+            for d in drafts[-2:]:
+                text = d if isinstance(d, str) else str(d)
+                total_citations += len(citation_pattern.findall(text))
+                total_claims += len(re.findall(
+                    r"(?:studies? show|research indicates?|evidence suggests?|"
+                    r"研究表明|证据显示)",
+                    text,
+                    re.I,
+                ))
+
+            if total_claims or total_citations:
+                lines.append(
+                    f"  Draft analysis: {total_claims} claims, "
+                    f"{total_citations} citations"
                 )
-                total_citations = 0
-                total_claims = 0
-                for d in drafts[-2:]:
-                    text = d if isinstance(d, str) else str(d)
-                    total_citations += len(citation_pattern.findall(text))
-                    total_claims += len(re.findall(
-                        r"(?:studies? show|research indicates?|evidence suggests?|"
-                        r"研究表明|证据显示)",
-                        text,
-                        re.I,
-                    ))
-
-                if total_claims or total_citations:
-                    lines.append(
-                        f"  Draft analysis: {total_claims} claims, "
-                        f"{total_citations} citations"
-                    )
-                    if total_claims > 0 and total_citations == 0:
-                        lines.append("  ⚠️ Claims exist but no citations found")
-            except Exception as exc:
-                logger.debug("[Writer] Board query failed: %s", exc)
+                if total_claims > 0 and total_citations == 0:
+                    lines.append("  ⚠️ Claims exist but no citations found")
 
         # Fallback: regex scan context
-        if len(lines) <= 1:
+        if not lines:
             claim_pattern = re.compile(
                 r"(?:(?:studies? show|research indicates?|evidence suggests?|"
                 r"it (?:has been |is )(?:shown|demonstrated|found)|"
@@ -89,6 +91,46 @@ class WriterAgent(BaseAgent):
                 )
                 uncited_count = min(len(claims), 15) - cited_count
                 lines.append(f"  {cited_count} cited, {uncited_count} uncited claims")
+
+        # Verify citations in recent drafts against known evidence artifacts
+        if drafts and evidence:
+            from backend.types import ContextLevel
+            from backend.utils.verification import verify_citations
+
+            known_titles: list[str] = []
+            known_ids: list[str] = []
+            for e in evidence:
+                aid = e.artifact_id if hasattr(e, "artifact_id") else str(e)
+                known_ids.append(aid)
+                if hasattr(e, "artifact_id") and self._board:
+                    try:
+                        ver = await self._board.get_latest_version(
+                            ArtifactType.EVIDENCE_FINDINGS, e.artifact_id
+                        )
+                        if ver > 0:
+                            content = await self._board.read_artifact(
+                                ArtifactType.EVIDENCE_FINDINGS,
+                                e.artifact_id,
+                                ver,
+                                ContextLevel.L2,
+                            )
+                            if isinstance(content, str) and len(content) > 10:
+                                known_titles.append(content[:200])
+                    except Exception:
+                        pass
+
+            for d in drafts[-2:]:
+                draft_text = d if isinstance(d, str) else str(d)
+                unverified = verify_citations(draft_text, known_titles, known_ids)
+                if unverified:
+                    lines.append(
+                        f"  ⚠️ {len(unverified)} unverifiable citation(s) in draft: "
+                        f"{', '.join(unverified[:5])}"
+                    )
+                    logger.warning(
+                        "[Writer] Pre-hook: %d unverifiable citations detected",
+                        len(unverified),
+                    )
 
         if lines:
             return context + "\n" + "\n".join(lines)

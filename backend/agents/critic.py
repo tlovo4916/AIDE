@@ -131,15 +131,101 @@ class CriticAgent(BaseAgent):
 
         return []  # no data available
 
+    async def _verify_claim_sources(self) -> list[str]:
+        """Cross-verify claim artifacts: check that source_artifact IDs exist on the board.
+
+        Returns a list of warning strings for claims whose sources are unverifiable.
+        """
+        warnings: list[str] = []
+        if not self._board:
+            return warnings
+
+        # Collect all artifact IDs that exist on the board
+        existing_ids: set[str] = set()
+        for at in ArtifactType:
+            try:
+                metas = await self._board.list_artifacts(at)
+                for m in metas:
+                    existing_ids.add(m.artifact_id)
+            except Exception:
+                continue
+
+        # Check draft content for citation references against evidence artifacts
+        evidence_titles: list[str] = []
+        evidence_ids: list[str] = []
+        try:
+            evidence_metas = await self._board.list_artifacts(ArtifactType.EVIDENCE_FINDINGS)
+            for m in evidence_metas:
+                evidence_ids.append(m.artifact_id)
+                ver = await self._board.get_latest_version(
+                    ArtifactType.EVIDENCE_FINDINGS, m.artifact_id
+                )
+                if ver > 0:
+                    from backend.types import ContextLevel
+
+                    content = await self._board.read_artifact(
+                        ArtifactType.EVIDENCE_FINDINGS,
+                        m.artifact_id,
+                        ver,
+                        ContextLevel.L2,
+                    )
+                    if isinstance(content, str) and len(content) > 10:
+                        evidence_titles.append(content[:200])
+        except Exception as exc:
+            logger.debug("[Critic] Failed to load evidence for verification: %s", exc)
+
+        # Scan draft artifacts for unverifiable citations
+        try:
+            from backend.utils.verification import verify_citations
+
+            draft_metas = await self._board.list_artifacts(ArtifactType.DRAFT)
+            for m in draft_metas[-3:]:  # check last 3 drafts
+                ver = await self._board.get_latest_version(ArtifactType.DRAFT, m.artifact_id)
+                if ver == 0:
+                    continue
+                from backend.types import ContextLevel
+
+                raw = await self._board.read_artifact(
+                    ArtifactType.DRAFT, m.artifact_id, ver, ContextLevel.L2
+                )
+                if not raw:
+                    continue
+                text = raw if isinstance(raw, str) else str(raw)
+                unverified = verify_citations(text, evidence_titles, evidence_ids)
+                if unverified:
+                    warnings.append(
+                        f"Draft '{m.artifact_id}' has {len(unverified)} unverifiable "
+                        f"citation(s): {', '.join(unverified[:5])}"
+                    )
+        except Exception as exc:
+            logger.debug("[Critic] Draft citation verification failed: %s", exc)
+
+        return warnings
+
     async def post_execute(
         self, response: AgentResponse, context: str, task: AgentTask
     ) -> AgentResponse:
         """Extract action items from review → auto-create InfoRequests.
 
+        Also cross-verifies claim sources against the board to flag
+        potentially hallucinated citations.
+
         Uses multiple extraction strategies in priority order:
         1. Structured: parse 'actionable_suggestions' from review content dict
         2. Keyword: look for role mentions + action verbs in review text
         """
+        # --- Claim-source cross-verification ---
+        claim_warnings = await self._verify_claim_sources()
+        if claim_warnings:
+            for w in claim_warnings:
+                logger.warning("[Critic] Hallucination check: %s", w)
+            # Inject warnings into the first review action's content
+            for action in response.actions:
+                if action.target == ArtifactType.REVIEW.value:
+                    existing = action.content.get("hallucination_warnings", [])
+                    action.content["hallucination_warnings"] = existing + claim_warnings
+                    break
+
         if not self._info_service:
             return response
 

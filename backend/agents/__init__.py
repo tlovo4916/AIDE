@@ -1,12 +1,13 @@
 """Agent module -- specialist research agents and factory."""
 
-from backend.agents.base import BaseAgent, LLMRouter, WriteBackGuard
+from backend.agents.base import BaseAgent, WriteBackGuard
 from backend.agents.critic import CriticAgent
 from backend.agents.director import DirectorAgent
 from backend.agents.librarian import LibrarianAgent
 from backend.agents.scientist import ScientistAgent
 from backend.agents.subagent import SubAgent, SubAgentPool
 from backend.agents.writer import WriterAgent
+from backend.protocols import LLMRouter
 from backend.types import AgentRole
 
 

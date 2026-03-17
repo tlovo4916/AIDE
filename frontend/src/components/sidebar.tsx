@@ -13,6 +13,7 @@ import {
   MessageSquare,
   BookOpen,
   FileText,
+  Activity,
   ChevronDown,
 } from "lucide-react";
 import { useState, useEffect } from "react";
@@ -39,6 +40,7 @@ const PROJECT_SECTIONS: { key: ProjectSection; labelKey: I18nKey; icon: typeof B
   { key: "messages", labelKey: "nav.messages", icon: MessageSquare },
   { key: "knowledge", labelKey: "nav.knowledge", icon: BookOpen },
   { key: "paper", labelKey: "nav.paper", icon: FileText },
+  { key: "evaluation", labelKey: "nav.evaluation", icon: Activity },
 ];
 
 export function Sidebar() {

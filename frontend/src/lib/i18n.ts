@@ -12,6 +12,7 @@ const dict = {
   "nav.messages": { zh: "消息", en: "Messages" },
   "nav.knowledge": { zh: "知识库", en: "Knowledge" },
   "nav.paper": { zh: "论文", en: "Paper" },
+  "nav.evaluation": { zh: "评估", en: "Evaluation" },
   "nav.expandSidebar": { zh: "展开侧边栏", en: "Expand sidebar" },
   "nav.collapseSidebar": { zh: "收起侧边栏", en: "Collapse sidebar" },
 
@@ -101,6 +102,18 @@ const dict = {
   "section.topicDriftWarning": { zh: "偏题警告", en: "Topic Drift Warning" },
   "section.checkpointReview": { zh: "检查点审核", en: "Checkpoint Review" },
   "section.deleteProject": { zh: "删除项目", en: "Delete Project" },
+  "section.qualityDashboard": { zh: "质量仪表盘", en: "Quality Dashboard" },
+  "section.plannerDecisions": { zh: "调度决策", en: "Planner Decisions" },
+  "section.contradictions": { zh: "矛盾追踪", en: "Contradictions" },
+  "section.claims": { zh: "知识提取", en: "Claims" },
+  "section.compositeScore": { zh: "综合评分", en: "Composite Score" },
+  "section.dimensionRadar": { zh: "维度雷达", en: "Dimension Radar" },
+  "section.informationGain": { zh: "信息增益", en: "Information Gain" },
+  "section.convergenceProgress": { zh: "收敛进度", en: "Convergence Progress" },
+  "section.qualityMet": { zh: "质量达标", en: "Quality Met" },
+  "section.infoExhausted": { zh: "信息枯竭", en: "Info Exhausted" },
+  "section.noContradictions": { zh: "无矛盾", en: "No Contradictions" },
+  "section.conditionsMet": { zh: "{n}/3 条件满足", en: "{n}/3 conditions met" },
 
   // ─── Empty States ─────────────────────────────────────
   "empty.noProjects": { zh: "暂无项目", en: "No projects yet" },
@@ -115,6 +128,11 @@ const dict = {
   "empty.citationsHint": { zh: "当 Librarian 检索论文后，引用将在此显示", en: "Citations will appear as the Librarian retrieves papers" },
   "empty.researchInProgress": { zh: "研究进行中", en: "Research in progress" },
   "empty.paperWhenComplete": { zh: "研究完成后论文将可用", en: "The paper will be available once the research is complete" },
+  "empty.noEvaluations": { zh: "暂无评估数据", en: "No evaluations yet" },
+  "empty.noEvaluationsHint": { zh: "评估数据将在研究运行后出现", en: "Evaluation data will appear as the research runs" },
+  "empty.noContradictions": { zh: "未发现矛盾", en: "No contradictions found" },
+  "empty.noClaims": { zh: "暂无知识提取", en: "No claims extracted yet" },
+  "empty.noDecisions": { zh: "暂无调度记录", en: "No planner decisions yet" },
 
   // ─── Settings Labels ─────────────────────────────────
   "settings.deepseekApiKey": { zh: "DeepSeek API 密钥", en: "DeepSeek API Key" },
