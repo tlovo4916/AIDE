@@ -10,10 +10,13 @@ services:
       AIDE_CHROMA_PERSIST_DIR: "/app/workspace/.chroma"
       AIDE_WORKSPACE_DIR: "/app/workspace"
       AIDE_DEBUG: "true"
+      PYTHONPATH: "/app"
     env_file:
       - .env
     volumes:
       - ./backend:/app/backend
+      - ./alembic.ini:/app/alembic.ini:ro
+      - ./pyproject.toml:/app/pyproject.toml:ro
       - workspace_data:/app/workspace
     depends_on:
       postgres:

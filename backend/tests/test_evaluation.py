@@ -770,3 +770,530 @@ class TestDimensions:
         for phase, dims in PHASE_DIMENSIONS.items():
             total = sum(w for _, _, w in dims)
             assert abs(total - 1.0) < 0.01, f"Phase {phase} weights sum to {total}"
+
+
+# =====================================================================
+# 9. Evidence Mapping Tests
+# =====================================================================
+
+
+class TestEvidenceMapping:
+    """Test the evidence_mapping computable metric."""
+
+    def test_all_hypotheses_mapped(self):
+        from backend.evaluation.metrics import evidence_mapping
+
+        hypotheses = [
+            "Transformer models improve performance on vision tasks",
+            "Attention mechanism reduces computational overhead",
+        ]
+        evidence = [
+            "Studies show transformer models significantly improve performance on vision tasks "
+            "through better feature extraction mechanisms.",
+            "The attention mechanism reduces computational overhead compared to "
+            "recurrent approaches in multiple benchmarks.",
+        ]
+        result = evidence_mapping(hypotheses, evidence)
+        assert result.computable_value == 1.0
+
+    def test_partial_mapping(self):
+        from backend.evaluation.metrics import evidence_mapping
+
+        hypotheses = [
+            "Transformer models improve performance on vision tasks",
+            "Quantum computing will revolutionize cryptography",
+        ]
+        evidence = [
+            "Transformer models show strong performance on vision tasks with better accuracy.",
+        ]
+        result = evidence_mapping(hypotheses, evidence)
+        assert 0.0 < result.computable_value < 1.0
+
+    def test_no_hypotheses(self):
+        from backend.evaluation.metrics import evidence_mapping
+
+        result = evidence_mapping([], ["some evidence text"])
+        assert result.computable_value == 0.0
+
+
+# =====================================================================
+# 10. Specificity Tests
+# =====================================================================
+
+
+class TestSpecificity:
+    """Test the specificity computable metric."""
+
+    def test_high_specificity(self):
+        from backend.evaluation.metrics import specificity
+
+        artifacts = [
+            "The model achieved 95.3% accuracy on ImageNet with 12.5M parameters. "
+            "Training took 48 hours on 8 A100 GPUs with a batch size of 256. "
+            "The learning rate was 0.001 with AdamW optimizer. "
+            "Results: 92.1% top-1, 98.7% top-5 accuracy."
+        ]
+        result = specificity(artifacts)
+        assert result.computable_value is not None
+        assert result.computable_value > 0.3
+
+    def test_low_specificity(self):
+        from backend.evaluation.metrics import specificity
+
+        artifacts = [
+            "The approach showed good results and performed well across tasks. "
+            "The method is effective and can be applied to various domains. "
+            "Overall the system works as expected and meets requirements."
+        ]
+        result = specificity(artifacts)
+        assert result.computable_value is not None
+        assert result.computable_value < 0.3
+
+    def test_chinese_with_numbers(self):
+        from backend.evaluation.metrics import specificity
+
+        artifacts = [
+            "该模型在测试集上达到了95.3%的准确率，参数量为12.5M。"
+            "训练耗时48小时，使用8张A100 GPU，批次大小为256。"
+        ]
+        result = specificity(artifacts)
+        assert result.computable_value is not None
+        assert result.computable_value > 0.0
+
+
+# =====================================================================
+# 11. Claim Store Tests
+# =====================================================================
+
+
+class TestClaimStore:
+    """Test ClaimStore DB persistence (mocked session)."""
+
+    def test_confidence_mapping_values(self):
+        from backend.evaluation.store import _CONFIDENCE_MAP
+
+        assert _CONFIDENCE_MAP["strong"] == 1.0
+        assert _CONFIDENCE_MAP["moderate"] == 0.7
+        assert _CONFIDENCE_MAP["tentative"] == 0.4
+
+    def test_confidence_mapping(self):
+        from backend.evaluation.store import _CONFIDENCE_MAP
+
+        assert _CONFIDENCE_MAP["strong"] == 1.0
+        assert _CONFIDENCE_MAP["moderate"] == 0.7
+        assert _CONFIDENCE_MAP["tentative"] == 0.4
+        assert "unknown" not in _CONFIDENCE_MAP
+
+    def test_empty_claims_returns_empty(self):
+        """Verify save_claims with empty list short-circuits."""
+        import asyncio
+
+        from backend.evaluation.store import ClaimStore
+
+        result = asyncio.get_event_loop().run_until_complete(
+            ClaimStore.save_claims("12345678-1234-1234-1234-123456789012", [])
+        )
+        assert result == []
+
+    def test_store_classes_exist(self):
+        from backend.evaluation.store import ClaimStore, ContradictionStore, EvaluationStore
+
+        assert hasattr(ClaimStore, "save_claims")
+        assert hasattr(ClaimStore, "load_claims")
+        assert hasattr(ContradictionStore, "save_contradictions")
+        assert hasattr(ContradictionStore, "load_contradictions")
+        assert hasattr(EvaluationStore, "save_evaluation")
+        assert hasattr(EvaluationStore, "save_iteration_metric")
+
+
+# =====================================================================
+# 12. Evaluation Store Tests
+# =====================================================================
+
+
+class TestEvaluationStore:
+    """Test EvaluationStore structure and interface."""
+
+    def test_save_evaluation_signature(self):
+        import inspect
+
+        from backend.evaluation.store import EvaluationStore
+
+        sig = inspect.signature(EvaluationStore.save_evaluation)
+        params = list(sig.parameters.keys())
+        assert "project_id" in params
+        assert "evaluation" in params
+        assert "iteration" in params
+
+    def test_save_iteration_metric_signature(self):
+        import inspect
+
+        from backend.evaluation.store import EvaluationStore
+
+        sig = inspect.signature(EvaluationStore.save_iteration_metric)
+        params = list(sig.parameters.keys())
+        assert "project_id" in params
+        assert "phase" in params
+        assert "iteration" in params
+        assert "metric" in params
+        assert "eval_composite" in params
+
+    def test_empty_contradictions_returns_empty(self):
+        """Verify save_contradictions with empty list short-circuits."""
+        import asyncio
+
+        from backend.evaluation.store import ContradictionStore
+
+        result = asyncio.get_event_loop().run_until_complete(
+            ContradictionStore.save_contradictions("12345678-1234-1234-1234-123456789012", [], {})
+        )
+        assert result == []
+
+
+# =====================================================================
+# 13. Contradiction Store Tests
+# =====================================================================
+
+
+class TestContradictionStore:
+    """Test ContradictionStore structure."""
+
+    def test_evidence_encoding(self):
+        """Verify that evidence JSON encodes relationship and detected_by."""
+        import json as json_mod
+
+        evidence_json = json_mod.dumps(
+            {
+                "explanation": "Direct negation",
+                "relationship": "contradictory",
+                "detected_by": "keyword",
+            },
+            ensure_ascii=False,
+        )
+        parsed = json_mod.loads(evidence_json)
+        assert parsed["relationship"] == "contradictory"
+        assert parsed["detected_by"] == "keyword"
+        assert parsed["explanation"] == "Direct negation"
+
+    def test_evaluator_with_project_id(self):
+        """Test that EvaluatorService accepts project_id."""
+        from backend.evaluation.evaluator import EvaluatorService
+
+        mock_router = AsyncMock()
+        evaluator = EvaluatorService(mock_router, project_id="test-project-id")
+        assert evaluator._project_id == "test-project-id"
+
+
+# =====================================================================
+# 14. Store DB Round-Trip Tests (N02 fix)
+# =====================================================================
+
+
+class TestClaimStoreRoundTrip:
+    """Test ClaimStore with mocked DB session to verify ORM column mapping."""
+
+    @pytest.mark.asyncio
+    async def test_save_claims_orm_mapping(self):
+        """Verify Pydantic Claim → ORM Claim column mapping."""
+        from unittest.mock import patch
+
+        from backend.evaluation.store import ClaimStore
+
+        captured_rows = []
+
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock(side_effect=lambda row: captured_rows.append(row))
+        mock_session.begin = MagicMock(return_value=AsyncMock())
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_ctx)
+
+        claims = [
+            Claim(
+                claim_id="c1",
+                text="LLMs can reason about code",
+                source_artifact="hypothesis_001",
+                confidence="strong",
+            ),
+            Claim(
+                claim_id="c2",
+                text="Transformers struggle with arithmetic",
+                source_artifact="evidence_002",
+                confidence="tentative",
+            ),
+        ]
+
+        with patch("backend.models.async_session_factory", mock_factory):
+            ids = await ClaimStore.save_claims(
+                "12345678-1234-1234-1234-123456789012", claims,
+            )
+
+        assert len(ids) == 2
+        assert len(captured_rows) == 2
+
+        # Verify ORM field mapping
+        row0 = captured_rows[0]
+        assert row0.text == "LLMs can reason about code"
+        assert row0.confidence == 1.0  # "strong" → 1.0
+        assert row0.source_agent == "hypothesis_001"  # source_artifact → source_agent
+
+        row1 = captured_rows[1]
+        assert row1.text == "Transformers struggle with arithmetic"
+        assert row1.confidence == 0.4  # "tentative" → 0.4
+        assert row1.source_agent == "evidence_002"
+
+    @pytest.mark.asyncio
+    async def test_load_claims_reverse_mapping(self):
+        """Verify ORM Claim → Pydantic Claim reverse mapping."""
+        import uuid
+        from unittest.mock import patch
+
+        from backend.evaluation.store import ClaimStore
+
+        # Create mock ORM rows
+        mock_row1 = MagicMock()
+        mock_row1.id = uuid.uuid4()
+        mock_row1.text = "Test claim text"
+        mock_row1.confidence = 1.0
+        mock_row1.source_agent = "hyp_001"
+        mock_row1.created_at = None
+
+        mock_row2 = MagicMock()
+        mock_row2.id = uuid.uuid4()
+        mock_row2.text = "Another claim"
+        mock_row2.confidence = 0.4
+        mock_row2.source_agent = None
+        mock_row2.created_at = None
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [mock_row1, mock_row2]
+
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_ctx)
+
+        with patch("backend.models.async_session_factory", mock_factory):
+            claims = await ClaimStore.load_claims(
+                "12345678-1234-1234-1234-123456789012",
+            )
+
+        assert len(claims) == 2
+        assert claims[0].text == "Test claim text"
+        assert claims[0].confidence == "strong"  # 1.0 → "strong"
+        assert claims[0].source_artifact == "hyp_001"
+        assert claims[1].confidence == "tentative"  # 0.4 → "tentative"
+        assert claims[1].source_artifact == ""  # None → ""
+
+
+class TestContradictionStoreRoundTrip:
+    """Test ContradictionStore ORM mapping with mocked session."""
+
+    @pytest.mark.asyncio
+    async def test_save_contradictions_orm_mapping(self):
+        """Verify Pydantic Contradiction → ORM Contradiction mapping."""
+        import uuid
+        from unittest.mock import patch
+
+        from backend.evaluation.store import ContradictionStore
+
+        captured_rows = []
+
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock(side_effect=lambda row: captured_rows.append(row))
+        mock_session.begin = MagicMock(return_value=AsyncMock())
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_ctx)
+
+        claim_a = Claim(
+            claim_id="c1", text="Claim A", source_artifact="a", confidence="strong",
+        )
+        claim_b = Claim(
+            claim_id="c2", text="Claim B", source_artifact="b", confidence="moderate",
+        )
+        contradiction = Contradiction(
+            contradiction_id="ct1",
+            claim_a=claim_a,
+            claim_b=claim_b,
+            relationship="contradictory",
+            explanation="Direct negation",
+            severity=0.8,
+            detected_by="keyword",
+        )
+
+        uuid_a = uuid.uuid4()
+        uuid_b = uuid.uuid4()
+        claim_id_map = {"c1": uuid_a, "c2": uuid_b}
+
+        with patch("backend.models.async_session_factory", mock_factory):
+            ids = await ContradictionStore.save_contradictions(
+                "12345678-1234-1234-1234-123456789012",
+                [contradiction],
+                claim_id_map,
+            )
+
+        assert len(ids) == 1
+        assert len(captured_rows) == 1
+
+        row = captured_rows[0]
+        assert row.claim_a_id == uuid_a
+        assert row.claim_b_id == uuid_b
+        assert row.confidence == 0.8  # severity → confidence
+        assert row.status == "detected"
+
+        # Verify evidence JSON serialization
+        import json as json_mod
+
+        evidence = json_mod.loads(row.evidence)
+        assert evidence["explanation"] == "Direct negation"
+        assert evidence["relationship"] == "contradictory"
+        assert evidence["detected_by"] == "keyword"
+
+    @pytest.mark.asyncio
+    async def test_skips_missing_claim_uuid(self):
+        """Contradictions with unmapped claim IDs should be skipped."""
+        from unittest.mock import patch
+
+        from backend.evaluation.store import ContradictionStore
+
+        captured_rows = []
+
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock(side_effect=lambda row: captured_rows.append(row))
+        mock_session.begin = MagicMock(return_value=AsyncMock())
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_ctx)
+
+        claim_a = Claim(claim_id="c1", text="A", source_artifact="x")
+        claim_b = Claim(claim_id="c_missing", text="B", source_artifact="y")
+        contradiction = Contradiction(
+            contradiction_id="ct1",
+            claim_a=claim_a,
+            claim_b=claim_b,
+            explanation="test",
+        )
+
+        # Only c1 is mapped, c_missing is not
+        import uuid
+
+        claim_id_map = {"c1": uuid.uuid4()}
+
+        with patch("backend.models.async_session_factory", mock_factory):
+            ids = await ContradictionStore.save_contradictions(
+                "12345678-1234-1234-1234-123456789012",
+                [contradiction],
+                claim_id_map,
+            )
+
+        assert len(ids) == 0
+        assert len(captured_rows) == 0
+
+
+class TestEvaluationStoreRoundTrip:
+    """Test EvaluationStore ORM mapping with mocked session."""
+
+    @pytest.mark.asyncio
+    async def test_save_evaluation_orm_mapping(self):
+        """Verify PhaseEvaluation → EvaluationResult ORM mapping."""
+        from unittest.mock import patch
+
+        from backend.evaluation.store import EvaluationStore
+
+        captured_rows = []
+
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock(side_effect=lambda row: captured_rows.append(row))
+        mock_session.begin = MagicMock(return_value=AsyncMock())
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_ctx)
+
+        evaluation = PhaseEvaluation(
+            phase=ResearchPhase.EXPLORE,
+            dimensions={
+                "coverage": DimensionScore(
+                    name="coverage",
+                    weight=0.3,
+                    computable_value=0.8,
+                    combined=0.8,
+                    evidence=["High coverage"],
+                ),
+            },
+            composite_score=0.75,
+            evaluator_model="deepseek-chat",
+            evaluator_provider="deepseek",
+            raw_evidence={"test": "data"},
+        )
+
+        with patch("backend.models.async_session_factory", mock_factory):
+            row_id = await EvaluationStore.save_evaluation(
+                "12345678-1234-1234-1234-123456789012", evaluation, iteration=3,
+            )
+
+        assert row_id is not None
+        assert len(captured_rows) == 1
+
+        row = captured_rows[0]
+        assert row.phase == "explore"
+        assert row.iteration == 3
+        assert row.composite_score == 0.75
+        assert row.evaluator_model == "deepseek-chat"
+        assert row.evaluator_provider == "deepseek"
+        assert row.raw_evidence == {"test": "data"}
+        assert "coverage" in row.dimensions
+
+    @pytest.mark.asyncio
+    async def test_save_iteration_metric_orm_mapping(self):
+        """Verify InformationGainMetric → IterationMetric ORM mapping."""
+        from unittest.mock import patch
+
+        from backend.evaluation.store import EvaluationStore
+
+        captured_rows = []
+
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock(side_effect=lambda row: captured_rows.append(row))
+        mock_session.begin = MagicMock(return_value=AsyncMock())
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_ctx)
+
+        metric = InformationGainMetric(
+            iteration=5,
+            information_gain=0.12,
+            artifact_count_delta=3,
+            unique_claim_delta=2,
+            is_diminishing=True,
+            is_loop_detected=False,
+        )
+
+        with patch("backend.models.async_session_factory", mock_factory):
+            row_id = await EvaluationStore.save_iteration_metric(
+                "12345678-1234-1234-1234-123456789012",
+                phase="explore",
+                iteration=5,
+                metric=metric,
+                eval_composite=0.65,
+            )
+
+        assert row_id is not None
+        assert len(captured_rows) == 1
+
+        row = captured_rows[0]
+        assert row.phase == "explore"
+        assert row.iteration == 5
+        assert row.information_gain == 0.12
+        assert row.artifact_count_delta == 3
+        assert row.unique_claim_delta == 2
+        assert row.eval_composite == 0.65
+        assert row.metrics["is_diminishing"] is True
+        assert row.metrics["is_loop_detected"] is False

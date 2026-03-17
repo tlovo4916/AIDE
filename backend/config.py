@@ -98,7 +98,7 @@ class Settings(BaseSettings):
     use_adaptive_planner: bool = False
 
     # -- Embedding --
-    embedding_dimensions: int = 1536
+    embedding_dimensions: int = 4096
 
     # -- pgvector --
     pgvector_enabled: bool = True

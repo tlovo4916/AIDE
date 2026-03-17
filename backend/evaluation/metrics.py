@@ -7,6 +7,7 @@ import re
 from collections import Counter
 
 from backend.types import DimensionScore
+from backend.utils.nlp import ENGLISH_STOPWORDS as _STOPWORDS_EN
 
 # Section headers expected in a complete research paper (English + Chinese)
 _SECTION_HEADERS_EN = [
@@ -220,6 +221,117 @@ def structural_completeness(draft_text: str) -> DimensionScore:
         computable_value=value,
         combined=value,
         evidence=[f"Found sections: {', '.join(sorted(found))}"],
+    )
+
+
+# Regex patterns for specificity metric
+_QUANTITATIVE_RE = re.compile(r"\d+\.?\d*%?")
+_CAMEL_CASE_RE = re.compile(r"[A-Z][a-z]+(?:[A-Z][a-z]+)+")
+
+
+def evidence_mapping(
+    hypotheses: list[str],
+    evidence_texts: list[str],
+) -> DimensionScore:
+    """Compute how many hypotheses have supporting evidence.
+
+    For each hypothesis, extract keywords (minus stopwords) and check
+    whether ≥3 keywords appear in any evidence text.
+
+    Args:
+        hypotheses: Hypothesis texts.
+        evidence_texts: Evidence artifact texts.
+
+    Returns:
+        DimensionScore with value = fraction of hypotheses with evidence mapping.
+    """
+    if not hypotheses:
+        return DimensionScore(
+            name="evidence_mapping",
+            computable_value=0.0,
+            combined=0.0,
+            evidence=["No hypotheses to map"],
+        )
+
+    combined_evidence = " ".join(evidence_texts).lower()
+    mapped: list[str] = []
+    unmapped: list[str] = []
+
+    for hyp in hypotheses:
+        # Extract keywords: split on whitespace, remove stopwords and short tokens
+        words = [
+            w
+            for w in re.findall(r"[a-zA-Z\u4e00-\u9fff]{2,}", hyp.lower())
+            if w not in _STOPWORDS_EN
+        ]
+        if not words:
+            unmapped.append(hyp[:50])
+            continue
+
+        hits = sum(1 for w in words if w in combined_evidence)
+        if hits >= min(3, len(words)):
+            mapped.append(hyp[:50])
+        else:
+            unmapped.append(hyp[:50])
+
+    value = len(mapped) / len(hypotheses)
+    evidence_info: list[str] = [f"Mapped {len(mapped)}/{len(hypotheses)} hypotheses"]
+    if unmapped:
+        evidence_info.append(f"Unmapped: {', '.join(unmapped[:3])}")
+
+    return DimensionScore(
+        name="evidence_mapping",
+        computable_value=value,
+        combined=value,
+        evidence=evidence_info,
+    )
+
+
+def specificity(artifacts: list[str]) -> DimensionScore:
+    """Compute specificity score based on quantitative terms and proper nouns.
+
+    Quantitative density = count of numeric/percentage tokens / total word count.
+    Specificity = min(quantitative_density * 10, 1.0).
+
+    Args:
+        artifacts: List of artifact text content.
+
+    Returns:
+        DimensionScore with computable_value reflecting content specificity.
+    """
+    combined = " ".join(artifacts)
+    if not combined.strip():
+        return DimensionScore(
+            name="specificity",
+            computable_value=0.0,
+            combined=0.0,
+            evidence=["No content"],
+        )
+
+    words = combined.split()
+    total_words = len(words)
+    if total_words == 0:
+        return DimensionScore(
+            name="specificity", computable_value=0.0, combined=0.0, evidence=["No words"]
+        )
+
+    # Count quantitative tokens (numbers, percentages)
+    quant_count = len(_QUANTITATIVE_RE.findall(combined))
+    # Count proper nouns / CamelCase terms
+    camel_count = len(_CAMEL_CASE_RE.findall(combined))
+
+    specific_count = quant_count + camel_count
+    density = specific_count / total_words
+    value = min(density * 10, 1.0)
+
+    return DimensionScore(
+        name="specificity",
+        computable_value=value,
+        combined=value,
+        evidence=[
+            f"{quant_count} quantitative terms, {camel_count} proper nouns in {total_words} words",
+            f"Density: {density:.4f}, Score: {value:.2f}",
+        ],
     )
 
 

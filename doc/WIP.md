@@ -11,9 +11,9 @@
 | 死代码清理（adapter.py + Protocol精简） | 低 | 1 | Yes | ✅ 完成 |
 | Topic 注入 6层→2层 | 中 | 1-2 | Yes | ✅ 完成 |
 | Alembic 框架引入 + 11张新表 ORM | 中 | 2-3 | Yes | ✅ 完成 |
-| pgvector 启用（docker-compose + extension） | 低 | 0.5 | Yes | ⚠️ 镜像已切换，扩展未安装 |
+| pgvector 启用（docker-compose + extension） | 低 | 0.5 | Yes | ✅ 完成（init_db 自动安装） |
 | Settings 迁移 JSON→DB | 中 | 1-2 | Yes | ✅ 完成 |
-| 嵌入管线对接验证 | 低 | 1 | 依赖 DB 表 | 待验证 |
+| 嵌入管线对接验证 | 低 | 1 | 依赖 DB 表 | ✅ 完成（维度修正 1536→4096） |
 | **合计** | | **6-9 sessions** | | |
 
 **并行特征**：几乎所有工作项互相独立。死代码清理、DB建表、Settings迁移可三路并行。
@@ -24,14 +24,14 @@
 
 | 检查项 | 状态 | 备注 |
 |--------|------|------|
-| 127 个旧测试全部通过 | ✅ | `pytest backend/tests/ -v` 127 passed |
-| 11 张新表存在 | ⚠️ | 14 张表（期望 15），差 1 张与 pgvector 迁移相关 |
-| pgvector 扩展安装 | ❌ | `SELECT extname FROM pg_extension WHERE extname='vector'` 返回 0 rows |
+| 163 个测试全部通过 | ✅ | `pytest` 163 passed (含 Phase 2 新增 21 个) |
+| 15 张表存在 | ✅ | 14 业务表 + alembic_version = 15 |
+| pgvector 扩展安装 | ✅ | init_db() 自动 CREATE EXTENSION + 添加 embedding 列 |
 | Settings 从 DB 读写 | ✅ | 16 keys 已持久化到 project_settings 表 |
-| Alembic 迁移状态 | ⚠️ | `alembic current` 报配置路径问题，需修复 alembic.ini |
-| 前端功能无破坏 | 待测 | Dashboard / 创建项目 / 详情5个Tab / Settings读写 / WebSocket |
+| Alembic 迁移状态 | ✅ | `alembic current` → 003_audit_orm_alignment (head) |
+| 前端功能无破坏 | ✅ | API 8/8 + 前端 4/4 通过（Dashboard / Settings / 详情页 / WebSocket） |
 
-**M1 待修复**：pgvector 扩展未安装 → 002 迁移未完整执行 → 需排查 alembic.ini 路径配置。
+**M1 已完成**：pgvector 扩展由 `init_db()` 自动安装，Alembic 已修复（docker-compose 挂载 alembic.ini + PYTHONPATH），stamp 到 003 head。
 
 ---
 
@@ -39,24 +39,36 @@
 
 | 工作项 | 复杂度 | Sessions | 依赖 | 状态 |
 |--------|--------|----------|------|------|
-| SemanticBoard 骨架（Board Protocol 实现） | 高 | 3-4 | Phase 1 DB 表 | 未开始 |
-| 关系提取（LLM prompt + 后台任务） | 中 | 2-3 | SemanticBoard | 未开始 |
-| 相关性排序上下文构建（pgvector 查询 + 评分算法） | 高 | 2-3 | SemanticBoard + 嵌入 | 未开始 |
-| 覆盖缺口检测 | 中 | 1-2 | SemanticBoard + 嵌入 | 未开始 |
-| 事件总线 | 低 | 1 | SemanticBoard | 未开始 |
-| 语义去重 | 低 | 1 | 嵌入管线 | 未开始 |
-| factory.py feature flag 集成 | 中 | 1-2 | SemanticBoard 完成 | 未开始 |
+| SemanticBoard 骨架（Board Protocol 实现） | 高 | 3-4 | Phase 1 DB 表 | ✅ 完成 |
+| 关系提取（LLM prompt + 后台任务） | 中 | 2-3 | SemanticBoard | ✅ 完成 |
+| 相关性排序上下文构建（pgvector 查询 + 评分算法） | 高 | 2-3 | SemanticBoard + 嵌入 | ✅ 完成 |
+| 覆盖缺口检测 | 中 | 1-2 | SemanticBoard + 嵌入 | ✅ 完成 |
+| 事件总线 | 低 | 1 | SemanticBoard | ✅ 完成 |
+| 语义去重 | 低 | 1 | 嵌入管线 | ✅ 完成 |
+| factory.py feature flag 集成 | 中 | 1-2 | SemanticBoard 完成 | ✅ 完成 |
 | **合计** | | **11-16 sessions** | | |
 
 **关键瓶颈**：SemanticBoard 骨架是串行瓶颈——后续所有工作都依赖它。骨架完成后，关系提取 / 上下文构建 / 覆盖检测 / 事件总线可**四路并行**。
 
-### 里程碑 M2a：SemanticBoard 通过 Protocol 测试
+### 里程碑 M2a：SemanticBoard 通过 Protocol 测试 ✅
 
 验证标准：SemanticBoard 通过 Board Protocol 接口测试（读写 artifact + 查询），feature flag 切换正常。
 
-### 里程碑 M2b：语义层端到端验证
+**已完成**：21 个单元测试全部通过，feature flag 切换正常（off→Blackboard, on→SemanticBoard）。
+
+### 里程碑 M2b：语义层端到端验证 ✅
 
 验证标准：语义去重 + 关系提取 + 上下文构建全部集成，跑一次完整研究验证端到端正常。
+
+**已完成**：E2E 验证 9/9 通过：
+- 双写（FS + PostgreSQL）✓
+- pgvector 嵌入存储（4096维）✓
+- 语义去重（cosine sim > 0.85 过滤）✓
+- 语义搜索（相关性排序正确）✓
+- 上下文构建（composite score 排序 + bin-packing）✓
+- 事件总线（publish/drain）✓
+- 关系提取 graceful degradation（无 LLM 时不阻塞）✓
+- 修复：embedding 内容提取（JSON→纯文本，cosine sim 从 0.74 提升到 0.84+）
 
 ---
 
@@ -199,10 +211,3 @@ Phase 1 (8) → SemanticBoard (6) → 上下文构建 (3) → EvaluatorService (
 如果充分利用并行，**实际关键路径约 40 sessions**。
 
 ---
-
-## 建议
-
-1. **Phase 1 是最重要的里程碑**。看起来最"无聊"（删代码、建表），但决定后续所有工作的基础质量。
-2. **Benchmark 框架应第一个动手**（已完成 ✅）。"没有尺子就改代码是盲改"。
-3. **每个里程碑都要跑一次完整研究**验证端到端正常。真实 LLM 调用，不是单元测试。
-4. **不要一次做完一个 Phase 再开始下一个**。利用并行机会，多条线交替推进，但每条线内部保持串行纪律。

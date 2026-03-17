@@ -17,7 +17,7 @@ down_revision: str | None = "001_baseline"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-EMBEDDING_DIM = 1536
+EMBEDDING_DIM = 4096
 
 
 def upgrade() -> None:

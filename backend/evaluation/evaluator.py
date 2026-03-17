@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-import re
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -16,8 +16,10 @@ from backend.evaluation.dimensions import get_dimensions
 from backend.evaluation.metrics import (
     citation_density,
     coverage_breadth,
+    evidence_mapping,
     internal_consistency_keyword,
     source_diversity,
+    specificity,
     structural_completeness,
     terminology_coverage,
 )
@@ -33,87 +35,13 @@ from backend.types import (
     ResearchPhase,
 )
 from backend.utils.json_utils import safe_json_loads
+from backend.utils.nlp import tokenize_topic as _tokenize_topic
 
 if TYPE_CHECKING:
     from backend.blackboard.board import Blackboard
     from backend.llm.router import LLMRouter
 
 logger = logging.getLogger(__name__)
-
-_ENGLISH_STOPWORDS = frozenset(
-    {
-        "a",
-        "an",
-        "the",
-        "in",
-        "on",
-        "of",
-        "for",
-        "to",
-        "and",
-        "or",
-        "is",
-        "are",
-        "was",
-        "were",
-        "with",
-        "by",
-        "at",
-        "from",
-        "as",
-        "it",
-        "its",
-        "that",
-        "this",
-        "which",
-        "be",
-        "been",
-        "being",
-        "have",
-        "has",
-        "had",
-        "do",
-        "does",
-        "did",
-        "will",
-        "would",
-        "could",
-        "should",
-        "may",
-        "might",
-        "can",
-        "not",
-        "no",
-        "but",
-        "if",
-        "than",
-        "then",
-        "so",
-        "very",
-        "just",
-        "about",
-        "into",
-    }
-)
-
-
-def _tokenize_topic(text: str) -> list[str]:
-    """Extract meaningful tokens from topic text, supporting English and Chinese."""
-    tokens: list[str] = []
-    # Extract Chinese character segments and generate bigrams
-    chinese_segments = re.findall(r"[\u4e00-\u9fff]+", text)
-    for segment in chinese_segments:
-        for i in range(len(segment) - 1):
-            tokens.append(segment[i : i + 2])
-        if len(segment) == 1:
-            tokens.append(segment)
-    # Extract English words, filter stopwords and short tokens
-    english_words = re.findall(r"[a-zA-Z]{2,}", text)
-    for w in english_words:
-        low = w.lower()
-        if low not in _ENGLISH_STOPWORDS:
-            tokens.append(low)
-    return tokens
 
 
 # ---------------------------------------------------------------------------
@@ -223,11 +151,13 @@ class EvaluatorService:
         claim_extractor: ClaimExtractor | None = None,
         contradiction_detector: ContradictionDetector | None = None,
         info_gain: InformationGainDetector | None = None,
+        project_id: str | None = None,
     ) -> None:
         self._router = llm_router
         self._claim_extractor = claim_extractor or ClaimExtractor(llm_router)
         self._contradiction_detector = contradiction_detector or ContradictionDetector(llm_router)
         self._info_gain = info_gain or InformationGainDetector()
+        self._project_id = project_id
 
     async def evaluate_phase(
         self,
@@ -254,8 +184,9 @@ class EvaluatorService:
         else:
             use_evaluator = evaluator_model or settings.eval_model
 
-        # Collect artifacts
+        # Collect artifacts (flat list + by-type for evidence_mapping)
         artifact_texts = await self._collect_artifacts(board)
+        artifacts_by_type = await self._collect_artifacts_by_type(board)
         subtopics = await self._extract_subtopics(board)
 
         eval_result = PhaseEvaluation(
@@ -274,7 +205,9 @@ class EvaluatorService:
                 eval_result.dimensions["overall_quality"] = overall
             elif use_computable:
                 # Fallback: use coverage_breadth as a single computable proxy
-                score = self._compute_metric("coverage_breadth", artifact_texts, subtopics)
+                score = self._compute_metric(
+                    "coverage_breadth", artifact_texts, subtopics, artifacts_by_type
+                )
                 eval_result.composite_score = score.computable_value or 0.0
                 eval_result.dimensions["coverage_breadth"] = score
             return eval_result
@@ -288,7 +221,7 @@ class EvaluatorService:
             score = DimensionScore(name=dim_key, weight=weight)
 
             if use_computable and eval_type in ("computable", "mixed"):
-                score = self._compute_metric(dim_key, artifact_texts, subtopics)
+                score = self._compute_metric(dim_key, artifact_texts, subtopics, artifacts_by_type)
                 score.weight = weight
 
             if use_llm_eval and eval_type in ("llm", "mixed"):
@@ -320,6 +253,11 @@ class EvaluatorService:
             total_weight += weight
 
         eval_result.composite_score = weighted_sum / total_weight if total_weight > 0 else 0.0
+
+        # Persist to DB if project_id is set
+        if self._project_id:
+            await self._save_evaluation_to_db(eval_result, iteration=0)
+
         return eval_result
 
     async def evaluate_contradictions(
@@ -347,7 +285,13 @@ class EvaluatorService:
                 claims = await self._claim_extractor.extract(text, m.artifact_id, art_type.value)
                 all_claims.extend(claims)
 
-        return await self._contradiction_detector.detect_all(all_claims)
+        contradictions = await self._contradiction_detector.detect_all(all_claims)
+
+        # Persist claims and contradictions to DB
+        if self._project_id and (all_claims or contradictions):
+            await self._save_claims_to_db(all_claims, contradictions)
+
+        return contradictions
 
     def check_information_gain(self, content: str) -> InformationGainMetric:
         """Add iteration content and compute information gain."""
@@ -404,6 +348,7 @@ class EvaluatorService:
         dim_key: str,
         artifacts: list[str],
         subtopics: list[str],
+        artifacts_by_type: dict[str, list[str]] | None = None,
     ) -> DimensionScore:
         """Dispatch to the right computable metric function."""
         if dim_key == "coverage_breadth":
@@ -419,6 +364,13 @@ class EvaluatorService:
             return structural_completeness(combined)
         if dim_key == "internal_consistency":
             return internal_consistency_keyword(artifacts)
+        if dim_key == "evidence_mapping":
+            by_type = artifacts_by_type or {}
+            hypotheses = by_type.get("hypotheses", [])
+            evidence_texts = by_type.get("evidence_findings", [])
+            return evidence_mapping(hypotheses, evidence_texts)
+        if dim_key == "specificity":
+            return specificity(artifacts)
         # Unknown computable dimension
         return DimensionScore(name=dim_key, computable_value=0.0)
 
@@ -494,6 +446,69 @@ class EvaluatorService:
                 text = content if isinstance(content, str) else json.dumps(content)
                 texts.append(text)
         return texts
+
+    async def _collect_artifacts_by_type(self, board: Blackboard) -> dict[str, list[str]]:
+        """Collect artifact texts grouped by ArtifactType value."""
+        by_type: dict[str, list[str]] = {}
+        for art_type in ArtifactType:
+            texts: list[str] = []
+            metas = await board.list_artifacts(art_type)
+            for m in metas:
+                ver = await board.get_latest_version(art_type, m.artifact_id)
+                if ver == 0:
+                    continue
+                content = await board.read_artifact(art_type, m.artifact_id, ver, ContextLevel.L2)
+                if not content:
+                    continue
+                text = content if isinstance(content, str) else json.dumps(content)
+                texts.append(text)
+            if texts:
+                by_type[art_type.value] = texts
+        return by_type
+
+    async def save_to_db(self, evaluation: PhaseEvaluation, iteration: int) -> None:
+        """Public method to persist evaluation to DB."""
+        if not self._project_id:
+            logger.warning("save_to_db called without project_id, skipping")
+            return
+        await self._save_evaluation_to_db(evaluation, iteration)
+
+    async def _save_evaluation_to_db(self, evaluation: PhaseEvaluation, iteration: int) -> None:
+        """Persist PhaseEvaluation to evaluation_results table."""
+        try:
+            from backend.evaluation.store import EvaluationStore
+
+            await EvaluationStore.save_evaluation(self._project_id, evaluation, iteration)
+            logger.info("Saved evaluation to DB for project %s", self._project_id)
+        except Exception:
+            logger.exception("Failed to save evaluation to DB (non-fatal)")
+
+    async def _save_claims_to_db(
+        self,
+        claims: list[Claim],
+        contradictions: list[Contradiction],
+    ) -> None:
+        """Persist claims and contradictions to DB."""
+        try:
+            from backend.evaluation.store import ClaimStore, ContradictionStore
+
+            claim_ids = await ClaimStore.save_claims(self._project_id, claims)
+            # Build mapping: pydantic claim_id → DB UUID
+            claim_id_map: dict[str, uuid.UUID] = {}
+            for pydantic_claim, db_uuid in zip(claims, claim_ids):
+                claim_id_map[pydantic_claim.claim_id] = db_uuid
+
+            if contradictions:
+                await ContradictionStore.save_contradictions(
+                    self._project_id, contradictions, claim_id_map
+                )
+            logger.info(
+                "Saved %d claims, %d contradictions to DB",
+                len(claim_ids),
+                len(contradictions),
+            )
+        except Exception:
+            logger.exception("Failed to save claims/contradictions to DB (non-fatal)")
 
     async def _extract_subtopics(self, board: Blackboard) -> list[str]:
         """Extract subtopics from research topic and directions."""

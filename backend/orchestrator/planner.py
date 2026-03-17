@@ -224,10 +224,12 @@ class OrchestratorPlanner:
         llm_router: LLMRouter,
         research_topic: str = "",
         lane_perspective: str = "",
+        event_bus: object | None = None,
     ) -> None:
         self._llm_router = llm_router
         self._research_topic = research_topic
         self._lane_perspective = lane_perspective
+        self._event_bus = event_bus
         self._critic_last_iter: dict[str, int] = {}  # phase.value -> last iter critic was called
         # History buffer: phase.value -> list of (iteration, agent.value) tuples (last 5)
         self._selection_history: dict[str, list[tuple[int, str]]] = {}
@@ -243,6 +245,27 @@ class OrchestratorPlanner:
         # Determine valid agents for this phase
         sequence = _PHASE_SEQUENCES.get(phase, [AgentRole.CRITIC])
         valid_agents = set(sequence)
+
+        # Drain events from the event bus and enrich context
+        event_notes: list[str] = []
+        if self._event_bus is not None:
+            try:
+                events = await self._event_bus.drain()
+                for ev in events:
+                    for rel in ev.relations:
+                        rel_type = rel.get("relation_type", "")
+                        if rel_type == "contradicts":
+                            event_notes.append(
+                                f"Contradiction detected in {ev.artifact_type.value} "
+                                f"artifact '{ev.artifact_id}' — Critic review recommended."
+                            )
+                        elif rel_type == "depends_on":
+                            event_notes.append(
+                                f"Dependency: {ev.artifact_type.value} '{ev.artifact_id}' "
+                                f"depends on artifact {rel.get('target_id', 'unknown')}."
+                            )
+            except Exception:
+                logger.debug("[Planner] Event bus drain failed (non-fatal)")
 
         # Critic guarantee: if critic hasn't run in _CRITIC_GUARANTEE_INTERVAL iters, force it
         last_critic = self._critic_last_iter.get(phase.value, 0)
@@ -310,6 +333,9 @@ class OrchestratorPlanner:
         base_task = task_map.get(agent, f"Perform your role duties for the {phase.value} phase.")
 
         task_desc = base_task
+
+        if event_notes:
+            task_desc += "\n\n" + "\n".join(f"⚠️ {note}" for note in event_notes)
 
         if self._lane_perspective:
             task_desc = f"[RESEARCH PERSPECTIVE]: {self._lane_perspective}\n\n{task_desc}"

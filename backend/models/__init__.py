@@ -39,8 +39,37 @@ async def init_db() -> None:
     for schema changes. ``create_all`` is kept here for dev convenience
     (auto-creates tables on first run without running ``alembic upgrade``).
     """
+    import logging
+
+    _logger = logging.getLogger(__name__)
+
     async with engine.begin() as conn:
+        # pgvector extension must exist before create_all (vector columns depend on it)
+        await conn.execute(
+            __import__("sqlalchemy").text(
+                "CREATE EXTENSION IF NOT EXISTS vector"
+            )
+        )
         await conn.run_sync(Base.metadata.create_all)
+
+        # Ensure embedding vector columns exist (create_all skips them because
+        # they are not mapped in ORM — added via raw SQL in Alembic 002).
+        dim = settings.embedding_dimensions
+        for table, col in [("artifacts", "embedding"), ("claims", "embedding")]:
+            row = await conn.execute(
+                __import__("sqlalchemy").text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = :tbl AND column_name = :col"
+                ),
+                {"tbl": table, "col": col},
+            )
+            if row.first() is None:
+                await conn.execute(
+                    __import__("sqlalchemy").text(
+                        f"ALTER TABLE {table} ADD COLUMN {col} vector({dim})"
+                    )
+                )
+                _logger.info("Added %s.%s vector(%d) column", table, col, dim)
 
 
 # -- Existing models --

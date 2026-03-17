@@ -146,7 +146,39 @@ async def _create_engine(
         return resp.content
 
     level_gen = LevelGenerator(llm_call)
-    board = Blackboard(workspace_path, action_executor=action_executor, level_generator=level_gen)
+
+    # Embedding service (used by both SemanticBoard and drift detection)
+    embedding_service = None
+    if settings.openrouter_api_key:
+        try:
+            from backend.knowledge.embeddings import EmbeddingService
+
+            embedding_service = EmbeddingService(model=embedding_model)
+        except Exception:
+            logger.warning("[Factory] Failed to create EmbeddingService")
+
+    # Board: SemanticBoard (feature flag) or filesystem Blackboard
+    event_bus = None
+    if settings.use_semantic_board:
+        from backend.blackboard.event_bus import EventBus
+        from backend.blackboard.semantic_board import SemanticBoard
+
+        event_bus = EventBus()
+        board = SemanticBoard(
+            project_path=workspace_path,
+            session_factory=async_session_factory,
+            embedding_service=embedding_service,
+            llm_router=llm_router,
+            project_id=project_id,
+            event_bus=event_bus,
+            action_executor=action_executor,
+            level_generator=level_gen,
+        )
+    else:
+        board = Blackboard(
+            workspace_path, action_executor=action_executor, level_generator=level_gen
+        )
+
     await board.init_workspace(research_topic=research_topic)
 
     write_back_guard = WriteBackGuard(llm_call=llm_call)
@@ -189,6 +221,7 @@ async def _create_engine(
         llm_router,
         research_topic=research_topic,
         lane_perspective=lane_perspective,
+        event_bus=event_bus,
     )
     convergence = ConvergenceDetector()
     backtrack = BacktrackController()
@@ -203,16 +236,6 @@ async def _create_engine(
     checkpoint_bridge = _CheckpointBridge(checkpoint_mgr)
     heartbeat = HeartbeatMonitor()
     trend_extractor = TrendExtractor(llm_router)
-
-    # Embedding service for semantic topic drift detection
-    embedding_service = None
-    if settings.openrouter_api_key:
-        try:
-            from backend.knowledge.embeddings import EmbeddingService
-
-            embedding_service = EmbeddingService(model=embedding_model)
-        except Exception:
-            logger.warning("[Factory] Failed to create EmbeddingService for drift detection")
 
     async def _on_phase_change(new_phase: str) -> None:
         try:

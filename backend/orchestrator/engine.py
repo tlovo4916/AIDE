@@ -378,6 +378,22 @@ class OrchestrationEngine:
                 # 7b. Trend extraction
                 await self._maybe_extract_trends()
 
+                # 7c. Coverage gap detection (semantic board only)
+                if hasattr(self._board, "compute_coverage"):
+                    from backend.config import settings as _cfg
+
+                    if self._iteration % _cfg.coverage_recompute_interval == 0:
+                        try:
+                            ks = await self._board.compute_coverage()
+                            if ks and ks.gap_descriptions:
+                                await self._board.update_meta(
+                                    "coverage_gaps", ks.gap_descriptions
+                                )
+                        except Exception:
+                            logger.warning(
+                                "[Engine] Coverage computation failed (non-fatal)"
+                            )
+
                 # 8. Handle challenges
                 await self._handle_challenges(self._board)
 
@@ -472,10 +488,15 @@ class OrchestrationEngine:
             allow_subagents=decision.allow_subagents,
         )
 
-        context = await self._build_state_summary(
-            self._board,
-            role=decision.agent_to_invoke,
-        )
+        if hasattr(self._board, "build_agent_context"):
+            context = await self._board.build_agent_context(
+                decision.agent_to_invoke, decision.task_description
+            )
+        else:
+            context = await self._build_state_summary(
+                self._board,
+                role=decision.agent_to_invoke,
+            )
         response = await agent.execute(context, task)
 
         if response.subagent_requests and self._subagent_pool:
